@@ -1,0 +1,69 @@
+# Target-runtime matrix for compatibility tests.
+# Each entry produces one row in the per-release scorecard.
+
+targets:
+  - id: node18
+    name: "Node.js 18 LTS"
+    runner: node
+    min_version: "18.0.0"
+    wasm_features: [bulk-memory, mutable-globals]
+    cold_start_slo_ms: 800
+    enabled: true
+
+  - id: node20
+    name: "Node.js 20 LTS"
+    runner: node
+    min_version: "20.0.0"
+    wasm_features: [bulk-memory, mutable-globals, simd]
+    cold_start_slo_ms: 600
+    enabled: true
+
+  - id: node22
+    name: "Node.js 22 LTS"
+    runner: node
+    min_version: "22.0.0"
+    wasm_features: [bulk-memory, mutable-globals, simd]
+    cold_start_slo_ms: 600
+    enabled: true
+
+  - id: browser-chromium
+    name: "Chromium (latest stable)"
+    runner: playwright
+    wasm_features: [bulk-memory, mutable-globals, simd]
+    cold_start_slo_ms: 1500
+    enabled: true
+
+  - id: browser-firefox
+    name: "Firefox (latest stable)"
+    runner: playwright
+    wasm_features: [bulk-memory, mutable-globals, simd]
+    cold_start_slo_ms: 1500
+    enabled: true
+
+  - id: browser-safari
+    name: "Safari / WebKit (latest stable)"
+    runner: playwright
+    wasm_features: [bulk-memory, mutable-globals]   # Safari SIMD support is more recent
+    cold_start_slo_ms: 1500
+    enabled: true
+
+  - id: cloudflare-workers
+    name: "Cloudflare Workers"
+    runner: miniflare
+    wasm_features: [bulk-memory, mutable-globals]
+    cold_start_slo_ms: 200       # tight — edge runtimes are latency-critical
+    enabled: false                # enable once miniflare integration lands
+
+  - id: deno
+    name: "Deno (latest stable)"
+    runner: deno
+    wasm_features: [bulk-memory, mutable-globals, simd]
+    cold_start_slo_ms: 800
+    enabled: false
+
+  - id: bun
+    name: "Bun (latest stable)"
+    runner: bun
+    wasm_features: [bulk-memory, mutable-globals, simd]
+    cold_start_slo_ms: 600
+    enabled: false

@@ -1,0 +1,8 @@
+torch>=2.0
+transformers>=4.30
+sentence-transformers>=2.2
+datasets>=2.14
+evaluate>=0.4
+wandb>=0.15
+bitlinear>=0.5
+numpy>=1.24

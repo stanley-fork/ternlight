@@ -1,0 +1,20 @@
+[package]
+name        = "tern-engine"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Wasm inference engine for the tern semantic embedding model. Compiles to wasm32-unknown-unknown via wasm-pack."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+tokenizers   = { version = "0.19", default-features = false, features = ["unstable_wasm"] }
+
+[profile.release]
+opt-level = "z"        # optimize for size — wasm-opt -Oz is also applied downstream
+lto       = true
+codegen-units = 1
+strip     = true

@@ -1,0 +1,23 @@
+{
+  "name": "tern-vec-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Root tooling for the tern monorepo. Not published to npm — the published packages live under packages/.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wenshutang/tern-vec.git"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "build:engine": "bash scripts/build-engine.sh",
+    "eval": "bash scripts/run-eval.sh"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  },
+  "packageManager": "pnpm@8.15.0"
+}

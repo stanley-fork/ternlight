@@ -1,0 +1,13 @@
+# Rust workspace root.
+# Members listed here participate in `cargo build` from the repo root.
+# The engine crate compiles to wasm32-unknown-unknown via wasm-pack — see scripts/build-engine.sh.
+
+[workspace]
+resolver = "2"
+members  = ["engine"]
+
+[workspace.package]
+version    = "0.1.0"
+edition    = "2024"
+license    = "MIT"
+repository = "https://github.com/wenshutang/tern-vec"

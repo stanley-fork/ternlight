@@ -1,0 +1,39 @@
+{
+  "name": "@tern/semantic",
+  "version": "0.1.0",
+  "description": "On-device semantic embeddings for JavaScript. Embed text, compare similarity, find nearest neighbors — locally, no API keys, no backend.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wenshutang/tern-vec.git",
+    "directory": "packages/semantic"
+  },
+  "keywords": [
+    "embeddings",
+    "semantic-search",
+    "vector-search",
+    "nearest-neighbor",
+    "on-device",
+    "edge",
+    "wasm",
+    "tern"
+  ],
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "files": [
+    "src/",
+    "engine.wasm",
+    "model.bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@tern/core": "workspace:*"
+  },
+  "scripts": {
+    "build": "echo 'TODO: copy engine.wasm + model.bin from build artifacts'",
+    "test": "node --test tests/"
+  }
+}

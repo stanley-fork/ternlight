@@ -1,0 +1,28 @@
+# Smoke config — validates the pipeline end-to-end in ~1 minute on M-series.
+# Use this before kicking off the full 1M run to catch pipeline bugs cheaply.
+
+wandb_project: ternlight-micro
+wandb_group: smoke
+wandb_tags:
+  - tier:micro
+  - phase:smoke
+
+data:
+  sources:
+    - name: ms_marco
+      hf_dataset: ms_marco
+      hf_config: v2.1
+      split: train
+      text_field: query
+      weight: 1.0
+  total_samples: 1000
+  max_len: 128
+  teacher_id: sentence-transformers/all-MiniLM-L6-v2
+  teacher_revision: main
+  tokenizer_id: bert-base-uncased
+  teacher_batch_size: 64
+  seed: 42
+  val_ratio: 0.10
+  test_ratio: 0.10
+  cache_dir: cache
+  cache_name: smoke_1k

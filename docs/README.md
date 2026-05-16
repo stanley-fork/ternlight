@@ -18,6 +18,7 @@ Project documentation. Three layers, increasing in depth:
 |---|---|
 | [tern-phase1-prototype.md](tern-phase1-prototype.md) | Phase 1 spec: distillation training prototype |
 | [tern-phase2-prototype.md](tern-phase2-prototype.md) | Phase 2 spec: Wasm engine build |
+| [tern-training-pipeline.md](tern-training-pipeline.md) | Plan for the first rigorous training run after the POC — 1M data, micro tier, M-series |
 
 ## 3. Deep technical (training internals)
 

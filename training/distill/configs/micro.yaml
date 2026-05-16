@@ -1,0 +1,57 @@
+# Micro tier — the rigorous first run.
+# 1M samples, mixed sources, micro architecture (d_model=256), MS MARCO + sentence-transformers mix.
+# Wall-clock on M-series: teacher encoding ~30-60 min, rest of prep is fast.
+
+wandb_project: ternlight-micro
+wandb_group: msmarco-mix-1M-d256
+wandb_tags:
+  - tier:micro
+  - phase:rigorous-run-v1
+  - dataset-mix:msmarco+st-mix
+
+data:
+  sources:
+    # 60% — real search queries; what users actually type into a search bar.
+    - name: ms_marco
+      hf_dataset: ms_marco
+      hf_config: v2.1
+      split: train
+      text_field: query
+      weight: 0.60
+
+    # 40% spread across sentence-transformers/embedding-training-data subsets.
+    # Picked for the UI-search demo target: paraphrase pairs + natural Q&A.
+    # Each subset stores pairs as a list under the "set" column; the loader
+    # takes the first non-empty string element.
+    - name: st-quora
+      hf_dataset: sentence-transformers/embedding-training-data
+      hf_config: quora_duplicates
+      split: train
+      text_field: set
+      weight: 0.15
+
+    - name: st-gooaq
+      hf_dataset: sentence-transformers/embedding-training-data
+      hf_config: gooaq_pairs
+      split: train
+      text_field: set
+      weight: 0.15
+
+    - name: st-yahoo
+      hf_dataset: sentence-transformers/embedding-training-data
+      hf_config: yahoo_answers_title_question
+      split: train
+      text_field: set
+      weight: 0.10
+
+  total_samples: 1_000_000
+  max_len: 128
+  teacher_id: sentence-transformers/all-MiniLM-L6-v2
+  teacher_revision: main
+  tokenizer_id: bert-base-uncased
+  teacher_batch_size: 256
+  seed: 42
+  val_ratio: 0.05
+  test_ratio: 0.05
+  cache_dir: cache
+  cache_name: msmarco_mix_1M

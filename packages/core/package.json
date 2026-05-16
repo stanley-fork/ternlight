@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wenshutang/tern-vec.git",
+    "url": "https://github.com/soycaporal/ternlight.git",
     "directory": "packages/core"
   },
   "main": "src/index.js",

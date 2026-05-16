@@ -43,7 +43,7 @@ If you're building a browser extension, a static-site search, an Obsidian plugin
 ## Repository layout
 
 ```
-tern-vec/
+ternlight/
 ├── packages/         JS packages (npm, pnpm workspace)
 │   ├── semantic/     @tern/semantic — embedding API
 │   └── core/         @tern/core — shared types

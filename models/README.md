@@ -14,7 +14,7 @@
 Model binaries are attached to GitHub Releases of this repo:
 
 ```
-https://github.com/wenshutang/tern-vec/releases
+https://github.com/soycaporal/ternlight/releases
 ```
 
 Each release includes:

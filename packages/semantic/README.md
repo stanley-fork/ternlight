@@ -85,4 +85,4 @@ The model is small (~9M params, ~3 MB shipped). It's purpose-built for short-str
 
 ## Status
 
-**v0.1, pre-alpha.** Not yet on npm. Tracking issues and roadmap at [https://github.com/wenshutang/tern-vec](https://github.com/wenshutang/tern-vec).
+**v0.1, pre-alpha.** Not yet on npm. Tracking issues and roadmap at [https://github.com/soycaporal/ternlight](https://github.com/soycaporal/ternlight).

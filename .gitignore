@@ -43,6 +43,7 @@ eval/regression/test_data/*.json
 .DS_Store
 .idea/
 .vscode/
+.obsidian/
 *.swp
 *.swo
 .env

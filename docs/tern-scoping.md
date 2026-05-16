@@ -89,12 +89,11 @@ Use @tern to score messy input against known system states. Once confidence cros
 
 The project ships under the `@tern` scoped namespace. Each package is a purpose-built micro-tool sharing one underlying Wasm engine — only the trained model head changes.
 
-| Package | Use Case | Task Type |
-|---|---|---|
-| **@tern/semantic** | Embedding generation, similarity matching | Encoder, no head |
-| **@tern/classify** | Edge intent routing for serverless functions | Classification head |
-| **@tern/filter** | Client-side spam / toxicity pre-filtering | Binary classification |
-| **@tern/extract** | Lightweight micro-NER for CLI and CI/CD | Token classification |
+| Package            | Use Case                                     | Task Type             |
+| ------------------ | -------------------------------------------- | --------------------- |
+| **@tern/semantic** | Embedding generation, similarity matching    | Encoder, no head      |
+| **@tern/classify** | Edge intent routing for serverless functions | Classification head   |
+| **@tern/extract**  | Lightweight micro-NER for CLI and CI/CD      | Token classification  |
 
 **The branding:** "Tern" is both the seabird — small, fast, built for long distances — and a direct abbreviation of *ternary*, the 1.58-bit quantization scheme that makes the extreme size reduction possible. The name works as a technical signal and a product identity simultaneously.
 

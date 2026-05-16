@@ -52,3 +52,4 @@ eval/regression/test_data/*.json
 
 # ── Claude Code (local overrides) ───────────────────────────────────────────
 .claude/settings.local.json
+.claude/settings.json

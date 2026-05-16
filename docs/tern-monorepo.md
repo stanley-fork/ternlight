@@ -31,23 +31,23 @@ tern/                               ← repo root (rename from tern-core)
 │
 ├── training/                       ← Python training pipeline
 │   ├── distill/                    Stage 1 — distillation training (fp32 baseline + QAT)
-│   │   ├── prepare.py              build the .pt cache (MS MARCO + teacher embeddings)
-│   │   ├── train.py                training entry point (fp32 or QAT, by config)
-│   │   ├── evaluate.py             Phase 1 go/no-go scorecard on the .pt checkpoint
+│   │   ├── prep/                   Phase 1 — data prep (one-time setup)
+│   │   │   ├── prepare.py          entry point: read config, build cache
+│   │   │   └── ingest.py           helpers: loaders, dedup, tokenize, encode, split, manifest
+│   │   ├── train.py                Phase 2/3 entry point (fp32 or QAT, by config)
 │   │   ├── trainer.py              Trainer class (warmup → QAT by config)
 │   │   ├── model.py                StudentEncoder + attention + FFN
 │   │   ├── quantization.py         BitLinear swap, embedding ternarization, zero-frac health
 │   │   ├── loss.py                 distillation + contrastive
-│   │   ├── data.py                 TernDataset + collate
-│   │   ├── config.py               pydantic schema + YAML loader
+│   │   ├── evaluate.py             Phase 4 go/no-go scorecard on the .pt checkpoint
+│   │   ├── data.py                 cross-phase: TernDataset, collate_fn, save/load_cache
+│   │   ├── config.py               cross-phase: pydantic schemas + YAML loader
 │   │   ├── configs/                per-tier configs (micro.yaml, micro-fp32.yaml, ...)
-│   │   ├── corpora/                eval data (general.jsonl, tech.jsonl)
-│   │   ├── tests/
+│   │   ├── corpora/                local eval data (general.jsonl, tech.jsonl)
 │   │   └── requirements.txt
 │   └── pack/                       Stage 2 — bit-pack .pt → .bin
 │       ├── pack.py                 read .pt, ternarize, pack 2 bits/weight, write .bin
-│       ├── verify.py               round-trip a packed .bin against the source .pt
-│       └── tests/
+│       └── verify.py               round-trip a packed .bin against the source .pt
 │
 ├── eval/                           ← cross-cutting engine-quality evaluation
 │   ├── regression/                 engine vs Phase 1 baselines on real eval tasks

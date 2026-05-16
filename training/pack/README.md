@@ -16,8 +16,7 @@ python pack.py --checkpoint ../distill/runs/micro-qat-150k-100ep/checkpoint_ep10
 ```
 pack/
 ├── pack.py        entry point: .pt → .bin
-├── verify.py      round-trip a packed .bin and compare against the source .pt
-└── tests/         pytest — ternary round-trip, byte-level layout, w_scale parity
+└── verify.py      round-trip a packed .bin and compare against the source .pt
 ```
 
 ## .bin format

@@ -9,45 +9,44 @@ cd training/distill
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 1. One-time: cache MS MARCO queries + teacher embeddings to disk
-python prepare.py
+# 1. One-time: build the cached training dataset
+python prep/prepare.py --config configs/micro.yaml
 
 # 2. Train (uses GPU if available)
 python train.py --config configs/micro.yaml
 
 # 3. Run go/no-go eval suite on the final checkpoint
-python evaluate.py --checkpoint runs/micro-qat-150k-100ep/checkpoint_ep100.pt
+python evaluate.py --checkpoint runs/micro-qat-1M-60ep/checkpoint_ep60.pt
 ```
 
 ## Layout
 
-Flat — no nested sub-packages. A new contributor `ls`s the directory and sees the whole map.
-
 ```
 distill/
-├── prepare.py          entry point: build the .pt cache (MS MARCO + teacher embeddings)
-├── train.py            entry point: parse args, load config, run training
-├── evaluate.py         entry point: load checkpoint, run Tasks 1/2/3, emit verdict
-├── trainer.py          Trainer class (warmup → QAT controlled by config, not by file)
-├── model.py            StudentEncoder + attention + FFN + transformer block
-│                       (explicit Q/K/V Linear layers — BitLinear-reachable)
-├── quantization.py     BitLinear swap, embedding ternarization, zero-frac health
-├── loss.py             distillation (cosine) + contrastive (within-batch guardrail)
-├── data.py             TernDataset, collate_fn
-├── config.py           pydantic schema + YAML loader
-├── configs/            per-tier configs
-│   ├── micro.yaml          d_model=256, full QAT run
-│   ├── micro-fp32.yaml     float32 baseline (the ruler for QAT)
-│   ├── small.yaml          d_model=384 fallback
-│   └── smoke.yaml          tiny config for CI / quick local check
-├── corpora/            eval data (jsonl) — review/edit without touching Python
-│   ├── general.jsonl       general retrieval queries + expected matches
-│   └── tech.jsonl          tech-domain retrieval queries + expected matches
-├── tests/              pytest — model shapes, loss math, quant round-trip, smoke train
+├── prep/                  Phase 1 — data preparation (one-time setup)
+│   ├── prepare.py             entry point: read config, build cache
+│   └── ingest.py              helpers: loaders, dedup, tokenize, encode, split, manifest, stats
+├── train.py               Phase 2/3 entry point: parse args, load config, run training
+├── trainer.py             Trainer class (warmup → QAT controlled by config, not by file)
+├── model.py               StudentEncoder + attention + FFN + transformer block
+│                          (explicit Q/K/V Linear layers — BitLinear-reachable)
+├── quantization.py        BitLinear swap, embedding ternarization, zero-frac health
+├── loss.py                distillation (cosine) + contrastive (within-batch guardrail)
+├── evaluate.py            Phase 4 entry point: load checkpoint, run Tasks 1/2/3, emit verdict
+├── data.py                cross-phase: TernDataset, collate_fn, save_cache, load_cache
+├── config.py              cross-phase: pydantic schemas + YAML loader
+├── configs/               per-tier configs
+│   ├── micro.yaml             d_model=256, full QAT run
+│   ├── micro-fp32.yaml        float32 baseline (the ruler for QAT)
+│   ├── small.yaml             d_model=384 fallback
+│   └── smoke.yaml             tiny config for CI / quick local check
+├── corpora/               local eval data (jsonl) — review/edit without touching Python
+│   ├── general.jsonl
+│   └── tech.jsonl
 └── requirements.txt
 ```
 
-Modules (`config`, `data`, `model`, `quantization`, `loss`, `trainer`) define classes and functions. Entry points (`prepare`, `train`, `evaluate`) are thin scripts that orchestrate the modules and handle CLI/wandb.
+`prep/` is the only sub-package — it's a discrete one-time setup phase with multiple files. The training files (model, trainer, loss, quantization) stay flat at root because they're tightly coupled to one another. `data.py` and `config.py` are cross-phase contracts.
 
 ## Training pipeline
 
@@ -55,7 +54,7 @@ The pipeline has four phases. Phases 2 and 3 are both invoked through `train.py`
 
 | Phase | Action | Entry point | Key knobs |
 |---|---|---|---|
-| 1. Data prep | MS MARCO → tokenize → teacher encode → `.pt` cache | `prepare.py` | dataset slice, max_len, teacher id |
+| 1. Data prep | Multi-source mix → tokenize → teacher encode → `.pt` cache | `prep/prepare.py --config <yaml>` | source mix, sample count, teacher id |
 | 2. Float32 baseline | Distillation in pure fp32. Establishes the architecture ceiling. | `train.py --config configs/micro-fp32.yaml` | epochs, batch size, LR |
 | 3. QAT training | Float32 warmup → BitLinear ternary. Same distillation loss + contrastive guardrail. | `train.py --config configs/micro.yaml` | warmup_epochs, lambda schedule, loss weights |
 | 4. Post-train eval | Apply ternary projection to embedding, run Tasks 1/2/3, emit GO/MARGINAL/NO-GO. | `evaluate.py --checkpoint <run>/checkpoint_ep<N>.pt` | quant_embedding (default on) |

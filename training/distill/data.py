@@ -37,15 +37,25 @@ def save_cache(
     cache_dir: Path,
     name:      str,
 ) -> None:
-    """Write per-split .pt files + manifest.json. Creates cache_dir if missing."""
+    """Write per-split .pt files + manifest.json. Creates cache_dir if missing.
+
+    Clones each tensor before saving. Without this, sample tensors are views
+    into the parent tokenization/teacher-encoding tensors (which span ALL
+    post-dedup samples), so each split file would carry the full backing
+    storage — bloating val/test files by 20–30×.
+    """
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for split_name, samples in splits.items():
+        compact = [
+            {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in s.items()}
+            for s in samples
+        ]
         path = cache_dir / f"{name}.{split_name}.pt"
-        torch.save(samples, path)
+        torch.save(compact, path)
         size_mb = path.stat().st_size / 1e6
-        print(f"  wrote {path}  ({len(samples):,} samples, {size_mb:.1f} MB)")
+        print(f"  wrote {path}  ({len(compact):,} samples, {size_mb:.1f} MB)")
 
     manifest_path = cache_dir / f"{name}.manifest.json"
     with open(manifest_path, "w") as f:

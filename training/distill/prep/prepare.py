@@ -33,7 +33,9 @@ from ingest import (
 
 
 def main(config_path: Path, force: bool = False) -> None:
-    cfg      = load_config(config_path)
+    cfg = load_config(config_path)
+    if cfg.data is None:
+        raise ValueError(f"Config {config_path} has no `data:` section. prep/prepare.py needs one.")
     data_cfg = cfg.data
 
     # ── Bail if cache already exists ─────────────────────────────────────────

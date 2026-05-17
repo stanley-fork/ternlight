@@ -1,0 +1,57 @@
+# Phase 2 — float32 baseline ("the ruler").
+#
+# Establishes the architecture's quality ceiling at d_model=256, ignoring
+# quantization. Same data cache as the QAT run (Phase 3), so the only
+# variable separating the two is whether ternary is enabled.
+#
+# Hyperparameters track the POC's micro-fp32-baseline-30ep with one ramp-up:
+# 40 epochs (vs POC's 30 at 25k) to give the curve room to fully plateau on
+# 1M samples. Save every 5 epochs so we can trace the quality curve and
+# pick the best checkpoint post-hoc.
+#
+# Wall-clock estimate on M-series: ~15-18 min/epoch × 40 ≈ 10-12 hours.
+# If this proves too slow, the same config drops cleanly onto a single cloud
+# GPU (Modal / Lambda Labs / RunPod) for ~10x speedup — point at the same
+# cache, change device implicitly via CUDA detection in train.py.
+
+wandb_project: ternlight-micro
+wandb_group: msmarco-mix-1M-d256
+wandb_tags:
+  - tier:micro
+  - phase:rigorous-run-v1
+  - mode:fp32-baseline
+
+train:
+  # Architecture (locked from POC scaled run — 0.812 cosine @ d_model=256)
+  vocab_size: 30522
+  d_model: 256
+  n_layers: 2
+  n_heads: 4
+  ffn_dim: 1024
+  output_dim: 384
+  dropout: 0.1
+
+  # Data cache reference (must match Phase 1's cache_name)
+  cache_dir: cache
+  cache_name: msmarco_mix_1M
+
+  # Optimization
+  epochs: 40                # POC: 30 at 25k. At 1M we have 40× more data per epoch;
+                            # 40 epochs gives the curve room to fully plateau.
+  batch_size: 64            # POC value — kept for direct comparability
+  lr: 1.0e-4                # POC value
+  weight_decay: 0.01        # POC value
+  lr_warmup_ratio: 0.05     # POC: 0.10. Halved because 40 ep × 14k batches = 560k steps;
+                            # 5% warmup is 28k steps — plenty.
+  grad_clip: 1.0            # POC value
+
+  # No quantization in Phase 2
+  enable_qat: false
+  qat_warmup_epochs: 0
+  contrastive_w: 0.0
+
+  # Run management
+  run_name: fp32-baseline
+  runs_dir: runs
+  save_every: 5             # 8 intermediate checkpoints + final → traces the quality curve
+  log_every_n_steps: 100    # ~140 per-step W&B points per epoch (out of 14k batches)

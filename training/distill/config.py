@@ -49,11 +49,47 @@ class DataConfig(BaseModel):
         return self
 
 
-# ── Phase 2/3: training (stub) ────────────────────────────────────────────────
+# ── Phase 2/3: training ───────────────────────────────────────────────────────
 
 class TrainConfig(BaseModel):
-    """Stub — fleshed out when implementing train.py / trainer.py."""
-    model_config = ConfigDict(extra="allow")
+    """Drives Phase 2 (fp32 baseline) and Phase 3 (QAT). Same Trainer for both;
+    `enable_qat` is the switch.
+
+    Architecture defaults match the POC's locked micro tier
+    (d_model=256, 2 layers, 4 heads, ffn 1024, output 384).
+    """
+
+    # Architecture
+    vocab_size:        int   = 30_522        # bert-base-uncased
+    d_model:           int   = 256
+    n_layers:          int   = 2
+    n_heads:           int   = 4
+    ffn_dim:           int   = 1_024
+    output_dim:        int   = 384           # MiniLM-L6-v2 teacher dim
+    dropout:           float = 0.1
+
+    # Data cache reference (consumes prep's output)
+    cache_dir:         Path  = Path("cache")
+    cache_name:        str
+
+    # Optimization
+    epochs:            int   = 20
+    batch_size:        int   = 64
+    lr:                float = 1e-4
+    weight_decay:      float = 0.01
+    lr_warmup_ratio:   float = 0.10
+    grad_clip:         float = 1.0
+
+    # QAT (Phase 3 only — fp32 baseline leaves these as defaults)
+    enable_qat:        bool  = False
+    qat_warmup_epochs: int   = 0
+    contrastive_w:     float = 0.0
+
+    # Run management
+    run_name:          str
+    runs_dir:          Path  = Path("runs")
+    save_every:        int   = 5
+    log_every_n_steps: int   = 100   # per-step train loss/LR/grad-norm to W&B; 0 = disable
 
 
 # ── Phase 4: eval (stub) ──────────────────────────────────────────────────────
@@ -66,15 +102,15 @@ class EvalConfig(BaseModel):
 # ── Top-level ─────────────────────────────────────────────────────────────────
 
 class Config(BaseModel):
-    # W&B (shared across phases — levels 1-3: project, run, job_type via tags)
+    # W&B (shared across phases — levels 1-3: project, run, job_type)
     wandb_project: str = "ternlight-micro"
-    wandb_group: str
-    wandb_tags: list[str] = Field(default_factory=list)
+    wandb_group:   str
+    wandb_tags:    list[str] = Field(default_factory=list)
 
-    # Per-phase
-    data:  DataConfig
-    train: Optional[TrainConfig] = None
-    eval:  Optional[EvalConfig]  = None
+    # Per-phase — all optional so a config can scope to one phase
+    data:  Optional[DataConfig]  = None      # Phase 1
+    train: Optional[TrainConfig] = None      # Phase 2/3
+    eval:  Optional[EvalConfig]  = None      # Phase 4
 
 
 def load_config(path: Path) -> Config:

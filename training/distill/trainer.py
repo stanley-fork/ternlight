@@ -26,8 +26,9 @@ import wandb
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup
 
-from config import TrainConfig
-from loss   import distillation_loss
+from config      import TrainConfig
+from loss        import contrastive_loss, distillation_loss
+import ternary_qat
 
 
 class Trainer:
@@ -40,6 +41,13 @@ class Trainer:
         device:       str,
         run_dir:      Path,
     ):
+        # ── QAT: swap nn.Linear → BitLinear BEFORE moving to device.
+        # Preserves the fp32 weights of any warm-started checkpoint as the
+        # BitLinear shadow weights. Sets lambda=0 (warmup mode).
+        if cfg.enable_qat:
+            n_swapped = ternary_qat.swap(model)
+            print(f"  ↳ QAT: swapped {n_swapped} nn.Linear → BitLinear  (lambda=0, warmup mode)")
+
         self.model        = model.to(device)
         self.train_loader = train_loader
         self.val_loader   = val_loader
@@ -71,16 +79,29 @@ class Trainer:
     # ── Public ────────────────────────────────────────────────────────────────
 
     def train(self) -> None:
-        print(f"\n→ Training {self.cfg.epochs} epochs")
+        print(f"\n→ Training {self.cfg.epochs} epochs"
+              + (f"  (QAT warmup {self.cfg.qat_warmup_epochs}ep → ternary)" if self.cfg.enable_qat else ""))
         for epoch in range(self.cfg.epochs):
-            t0 = time.time()
+            # QAT: flip lambda 0 → 1 at the configured warmup boundary.
+            # Step transition (not gradual). Loss is expected to spike briefly
+            # then recover; the contrastive guardrail helps shape the recovery.
+            if self.cfg.enable_qat and epoch == self.cfg.qat_warmup_epochs:
+                ternary_qat.set_lambda(self.model, 1.0)
+                print(f"\n{'='*60}")
+                print(f"  QAT lambda → 1.0  (forward pass now uses ternary {{-1, 0, +1}} weights)")
+                print(f"  Expect a small loss spike — recovery within ~5 epochs")
+                print(f"{'='*60}\n")
 
+            t0 = time.time()
             train_metrics = self._train_epoch()
             val_metrics   = self._eval_epoch()
             elapsed = time.time() - t0
 
+            phase = ("warmup" if self.cfg.enable_qat and epoch < self.cfg.qat_warmup_epochs
+                     else "qat" if self.cfg.enable_qat
+                     else "fp32")
             print(
-                f"Epoch {epoch+1:3d}/{self.cfg.epochs}  "
+                f"Epoch {epoch+1:3d}/{self.cfg.epochs}  [{phase:6s}]  "
                 f"loss={train_metrics['train/loss']:.4f}  "
                 f"cos={train_metrics['train/cosine_sim']:.4f}  "
                 f"val_loss={val_metrics['val/loss']:.4f}  "
@@ -89,8 +110,8 @@ class Trainer:
             )
 
             wandb.log({
-                "epoch":            epoch + 1,
-                "epoch_seconds":    elapsed,
+                "epoch":         epoch + 1,
+                "epoch_seconds": elapsed,
                 **train_metrics,
                 **val_metrics,
             })
@@ -102,8 +123,10 @@ class Trainer:
 
     def _train_epoch(self) -> dict[str, float]:
         self.model.train()
-        running_loss = 0.0
-        running_cos  = 0.0
+        running_loss    = 0.0
+        running_cos     = 0.0
+        running_distill = 0.0
+        running_contrast = 0.0
 
         for batch in self.train_loader:
             input_ids      = batch["input_ids"].to(self.device)
@@ -111,7 +134,16 @@ class Trainer:
             teacher_emb    = batch["teacher_emb"].to(self.device)
 
             student_emb = self.model(input_ids, attention_mask)
-            loss        = distillation_loss(student_emb, teacher_emb)
+            distill     = distillation_loss(student_emb, teacher_emb)
+
+            # QAT adds the contrastive guardrail (within-batch repulsion).
+            # Phase 2 stays at distillation only.
+            if self.cfg.enable_qat:
+                contrast = contrastive_loss(student_emb)
+                loss     = distill + self.cfg.contrastive_w * contrast
+                running_contrast += contrast.item()
+            else:
+                loss = distill
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -119,24 +151,33 @@ class Trainer:
             self.optimizer.step()
             self.scheduler.step()
 
-            running_loss += loss.item()
-            running_cos  += 1.0 - loss.item()
+            running_loss    += loss.item()
+            running_distill += distill.item()
+            running_cos     += 1.0 - distill.item()    # cosine sim derived from distillation only
             self._global_step += 1
 
             # Per-step W&B logging — tells you the LR warmup curve, grad health, intra-epoch loss shape
             if self.cfg.log_every_n_steps > 0 and self._global_step % self.cfg.log_every_n_steps == 0:
-                wandb.log({
-                    "step":                  self._global_step,
-                    "train_step/loss":       loss.item(),
-                    "train_step/lr":         self.scheduler.get_last_lr()[0],
-                    "train_step/grad_norm":  grad_norm.item(),
-                })
+                step_log = {
+                    "step":                 self._global_step,
+                    "train_step/loss":      loss.item(),
+                    "train_step/lr":        self.scheduler.get_last_lr()[0],
+                    "train_step/grad_norm": grad_norm.item(),
+                }
+                if self.cfg.enable_qat:
+                    step_log["train_step/distill"]  = distill.item()
+                    step_log["train_step/contrast"] = contrast.item()
+                wandb.log(step_log)
 
         n = len(self.train_loader)
-        return {
-            "train/loss":       running_loss / n,
-            "train/cosine_sim": running_cos  / n,
+        out = {
+            "train/loss":       running_loss    / n,
+            "train/cosine_sim": running_cos     / n,
+            "train/distill":    running_distill / n,
         }
+        if self.cfg.enable_qat:
+            out["train/contrast"] = running_contrast / n
+        return out
 
     def _eval_epoch(self) -> dict[str, float]:
         """Validation pass — loss + Spearman + embedding-distribution diagnostics."""
@@ -173,12 +214,21 @@ class Trainer:
         embed_std_mean = all_embs.std(dim=0).mean().item()
         max_offdiag    = max(student_sims) if student_sims else 0.0
 
-        return {
+        metrics = {
             "val/loss":                  total_loss / len(self.val_loader),
             "val/spearman":              result["spearmanr"],
             "embed/std_mean":            embed_std_mean,
             "embed/max_offdiag_cossim":  max_offdiag,
         }
+
+        # QAT collapse detector — POC saw 44% avg at GO; 60%+ + flat loss = trouble
+        if self.cfg.enable_qat:
+            zf = ternary_qat.zero_fractions(self.model)
+            if zf:
+                metrics["qat/zero_frac_avg"] = sum(zf.values()) / len(zf)
+                metrics["qat/zero_frac_max"] = max(zf.values())
+
+        return metrics
 
     # ── Checkpointing ─────────────────────────────────────────────────────────
 

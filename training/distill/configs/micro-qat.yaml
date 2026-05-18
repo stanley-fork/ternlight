@@ -1,0 +1,55 @@
+# Phase 3 — QAT ("the ship").
+#
+# Same architecture and data as Phase 2; the variable is ternary quantization.
+# Trains from scratch with POC's recipe: random init → 5 epochs of fp32-pass-through
+# warmup (BitLinear with lambda=0) → 30 epochs at lambda=1 (full ternary via STE).
+#
+# Why NOT warm-start from the Phase 2 fp32 checkpoint: fp32 training optimizes
+# for unconstrained precision, producing weight distributions that don't ternarize
+# cleanly. The lambda=0 warmup only buffers the activation-pipeline shock, not
+# the weight-distribution shock. BitNet b1.58 and our POC both train QAT from
+# scratch for this exact reason. (Warm-start variant deferred to v2 ablation.)
+#
+# Wall-clock estimate on M-series: ~8-9 min/epoch × 40 ≈ 5.5-6 hours.
+
+wandb_project: ternlight-micro
+wandb_group: msmarco-mix-1M-d256
+wandb_tags:
+  - tier:micro
+  - phase:rigorous-run-v1
+  - mode:qat
+
+train:
+  # Architecture (locked from POC + Phase 2 confirmation)
+  vocab_size: 30522
+  d_model: 256
+  n_layers: 2
+  n_heads: 4
+  ffn_dim: 1024
+  output_dim: 384
+  dropout: 0.1
+
+  # Data cache reference (same as Phase 2 — direct comparability)
+  cache_dir: cache
+  cache_name: msmarco_mix_1M
+
+  # Optimization — POC values throughout (we're reproducing the proven recipe)
+  epochs: 40                # matches Phase 2's count for direct comparability; POC ran 100 at 150k
+  batch_size: 64
+  lr: 1.0e-4                # POC value
+  weight_decay: 0.01
+  lr_warmup_ratio: 0.10     # POC proportional value — warmup ends just before lambda flips at ep 5
+  grad_clip: 1.0
+
+  # QAT
+  enable_qat: true
+  qat_warmup_epochs: 5      # POC value — fp32 pass-through gives optimizer time to settle into BitLinear pipeline
+  contrastive_w: 0.15       # POC value (empirically chosen; v2 sweep target)
+
+  # No init_from — from-scratch QAT per POC recipe
+
+  # Run management
+  run_name: qat-baseline
+  runs_dir: runs
+  save_every: 2             # finer curve resolution than Phase 2 — QAT trajectory is more interesting
+  log_every_n_steps: 100

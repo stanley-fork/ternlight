@@ -1,0 +1,41 @@
+# Phase 3 smoke — validates the QAT pipeline end-to-end in ~30s.
+# Tests the BitLinear swap, lambda transition, contrastive loss, and zero-fraction
+# monitoring on the smoke_1k cache. Trains from scratch (no warm-start) — the
+# point is to exercise the wiring, not to produce a useful model.
+
+wandb_project: ternlight-micro
+wandb_group: smoke
+wandb_tags:
+  - tier:micro
+  - phase:smoke
+  - mode:qat
+
+train:
+  vocab_size: 30522
+  d_model: 256
+  n_layers: 2
+  n_heads: 4
+  ffn_dim: 1024
+  output_dim: 384
+  dropout: 0.1
+
+  cache_dir: cache
+  cache_name: smoke_1k
+
+  epochs: 4
+  batch_size: 32
+  lr: 1.0e-4                # POC value
+  weight_decay: 0.01
+  lr_warmup_ratio: 0.10
+  grad_clip: 1.0
+
+  enable_qat: true
+  qat_warmup_epochs: 2      # 50% of 4 epochs — gives us 2 warmup + 2 ternary
+  contrastive_w: 0.15
+
+  # No init_from for smoke — train from scratch to fully exercise QAT cold-start
+
+  run_name: smoke-qat
+  runs_dir: runs
+  save_every: 2
+  log_every_n_steps: 100

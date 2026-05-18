@@ -84,6 +84,18 @@ def main(config_path: Path) -> None:
     )
     print(f"  parameters: {model.count_parameters():,}")
 
+    # ── 2b. Warm-start (optional) ────────────────────────────────────────────
+    # Loads model_state from another checkpoint. Phase 3 uses this to start
+    # QAT from a converged fp32 baseline (much better than random init).
+    # Optimizer/scheduler/RNG are NOT loaded — those reset for the new run.
+    # Must happen BEFORE Trainer ctor swaps to BitLinear (if enable_qat=true),
+    # so the BitLinear shadow weights inherit the fp32-trained values.
+    if tcfg.init_from is not None:
+        print(f"\n→ Warm-starting from {tcfg.init_from}")
+        ckpt = torch.load(tcfg.init_from, weights_only=False, map_location="cpu")
+        model.load_state_dict(ckpt["model_state"])
+        print(f"  loaded weights from epoch {ckpt['epoch']}")
+
     # ── 3. Run directory ─────────────────────────────────────────────────────
     short_sha = git_commit()[:7]
     full_run_name = f"{tcfg.run_name}-{short_sha}"

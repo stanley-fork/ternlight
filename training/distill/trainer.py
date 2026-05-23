@@ -40,13 +40,19 @@ class Trainer:
         cfg:          TrainConfig,
         device:       str,
         run_dir:      Path,
+        start_epoch:  int = 0,
     ):
         # ── QAT: swap nn.Linear → BitLinear BEFORE moving to device.
         # Preserves the fp32 weights of any warm-started checkpoint as the
-        # BitLinear shadow weights. Sets lambda=0 (warmup mode).
+        # BitLinear shadow weights. Lambda is 1.0 when resuming past the warmup
+        # boundary (start_epoch >= qat_warmup_epochs), else 0.0 for warmup.
         if cfg.enable_qat:
             n_swapped = ternary_qat.swap(model)
-            print(f"  ↳ QAT: swapped {n_swapped} nn.Linear → BitLinear  (lambda=0, warmup mode)")
+            if start_epoch >= cfg.qat_warmup_epochs:
+                ternary_qat.set_lambda(model, 1.0)
+                print(f"  ↳ QAT: swapped {n_swapped} nn.Linear → BitLinear  (lambda=1, resumed past warmup)")
+            else:
+                print(f"  ↳ QAT: swapped {n_swapped} nn.Linear → BitLinear  (lambda=0, warmup mode)")
 
         self.model        = model.to(device)
         self.train_loader = train_loader
@@ -54,6 +60,7 @@ class Trainer:
         self.cfg          = cfg
         self.device       = device
         self.run_dir      = run_dir
+        self.start_epoch  = start_epoch
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -79,9 +86,12 @@ class Trainer:
     # ── Public ────────────────────────────────────────────────────────────────
 
     def train(self) -> None:
-        print(f"\n→ Training {self.cfg.epochs} epochs"
-              + (f"  (QAT warmup {self.cfg.qat_warmup_epochs}ep → ternary)" if self.cfg.enable_qat else ""))
-        for epoch in range(self.cfg.epochs):
+        if self.start_epoch > 0:
+            print(f"\n→ Training epochs {self.start_epoch+1}..{self.cfg.epochs}  (resumed)")
+        else:
+            print(f"\n→ Training {self.cfg.epochs} epochs"
+                  + (f"  (QAT warmup {self.cfg.qat_warmup_epochs}ep → ternary)" if self.cfg.enable_qat else ""))
+        for epoch in range(self.start_epoch, self.cfg.epochs):
             # QAT: flip lambda 0 → 1 at the configured warmup boundary.
             # Step transition (not gradual). Loss is expected to spike briefly
             # then recover; the contrastive guardrail helps shape the recovery.

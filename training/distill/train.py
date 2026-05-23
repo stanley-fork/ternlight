@@ -84,17 +84,26 @@ def main(config_path: Path) -> None:
     )
     print(f"  parameters: {model.count_parameters():,}")
 
-    # ── 2b. Warm-start (optional) ────────────────────────────────────────────
-    # Loads model_state from another checkpoint. Phase 3 uses this to start
-    # QAT from a converged fp32 baseline (much better than random init).
-    # Optimizer/scheduler/RNG are NOT loaded — those reset for the new run.
-    # Must happen BEFORE Trainer ctor swaps to BitLinear (if enable_qat=true),
-    # so the BitLinear shadow weights inherit the fp32-trained values.
+    # ── 2b. Warm-start vs resume ─────────────────────────────────────────────
+    # init_from:    cross-recipe warm-start. Loads model_state only; optimizer,
+    #               scheduler, and global_step reset. Used for fp32 → QAT init.
+    # resume_from:  same-recipe continuation. Loads model + optimizer + scheduler
+    #               + global_step; loop picks up at ckpt["epoch"] + 1.
+    # Both must happen BEFORE Trainer ctor swaps to BitLinear, so BitLinear's
+    # shadow weights inherit the loaded values.
+    resume_ckpt = None
+    if tcfg.resume_from is not None and tcfg.init_from is not None:
+        raise ValueError("Cannot set both `resume_from` and `init_from`; pick one.")
     if tcfg.init_from is not None:
         print(f"\n→ Warm-starting from {tcfg.init_from}")
         ckpt = torch.load(tcfg.init_from, weights_only=False, map_location="cpu")
         model.load_state_dict(ckpt["model_state"])
         print(f"  loaded weights from epoch {ckpt['epoch']}")
+    elif tcfg.resume_from is not None:
+        print(f"\n→ Resuming from {tcfg.resume_from}")
+        resume_ckpt = torch.load(tcfg.resume_from, weights_only=False, map_location="cpu")
+        model.load_state_dict(resume_ckpt["model_state"])
+        print(f"  loaded model state from epoch {resume_ckpt['epoch']}")
 
     # ── 3. Run directory ─────────────────────────────────────────────────────
     short_sha = git_commit()[:7]
@@ -120,7 +129,14 @@ def main(config_path: Path) -> None:
     )
 
     # ── 5. Train ─────────────────────────────────────────────────────────────
-    trainer = Trainer(model, train_loader, val_loader, tcfg, device, run_dir)
+    start_epoch = resume_ckpt["epoch"] if resume_ckpt is not None else 0
+    trainer = Trainer(model, train_loader, val_loader, tcfg, device, run_dir, start_epoch=start_epoch)
+    if resume_ckpt is not None:
+        trainer.optimizer.load_state_dict(resume_ckpt["optimizer_state"])
+        trainer.scheduler.load_state_dict(resume_ckpt["scheduler_state"])
+        trainer._global_step = resume_ckpt["scheduler_state"]["last_epoch"]
+        print(f"  ↳ optimizer + scheduler state restored")
+        print(f"  ↳ resuming at step {trainer._global_step:,}  LR={trainer.scheduler.get_last_lr()[0]:.2e}")
     trainer.train()
 
     wandb.finish()

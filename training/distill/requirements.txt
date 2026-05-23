@@ -3,7 +3,7 @@ torch>=2.0
 transformers>=4.40
 sentence-transformers>=2.6
 datasets>=2.18
-bitlinear>=0.5
+bitlinear==2.4.6        # PINNED — BitLinear forward math must be byte-identical across resume runs and across machines (local MPS ↔ cloud CUDA)
 
 # Config + I/O
 pydantic>=2.5

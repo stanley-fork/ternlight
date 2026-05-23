@@ -1,0 +1,65 @@
+# Phase 3 — QAT resume from ep10 of the rigorous-run-v1 local run.
+#
+# The local run was killed at epoch 11 after MPS swap thrashing made
+# per-epoch wall-clock unworkable. ckpt_ep10 captured the last
+# clean-state checkpoint with full model + optimizer + scheduler.
+#
+# This config is byte-identical to micro-qat.yaml EXCEPT for:
+#   - resume_from:  points at the ep10 checkpoint
+#   - run_name:     distinct so W&B / runs/ folders don't collide
+#   - wandb_tags:   adds resume:ep10 marker
+#
+# Everything else (epochs=40, qat_warmup_epochs=5, lr=1e-4, lr_warmup_ratio=0.10)
+# is preserved so the scheduler's encoded position (step 127,920 / 511,680,
+# LR=8.33e-5) lines up with the same total horizon. The trainer:
+#   - loops epochs 11..40 (start_epoch=10 from ckpt)
+#   - sets lambda=1 immediately on swap (already past warmup_epochs=5)
+#   - inherits Adam moment estimates (no jittery 1-epoch rebuild)
+#
+# Expected first epoch: val_spearman ~0.79 (matches local ep11=0.7903 ± noise)
+
+wandb_project: ternlight-micro
+wandb_group: msmarco-mix-1M-d256
+wandb_tags:
+  - tier:micro
+  - phase:rigorous-run-v1
+  - mode:qat
+  - resume:ep10
+
+train:
+  # Architecture (locked — must match ckpt10 exactly)
+  vocab_size: 30522
+  d_model: 256
+  n_layers: 2
+  n_heads: 4
+  ffn_dim: 1024
+  output_dim: 384
+  dropout: 0.1
+
+  # Data cache reference (same cache as ep1-10; uploaded byte-identical to pod)
+  cache_dir: cache
+  cache_name: msmarco_mix_1M
+
+  # Optimization — UNCHANGED from original micro-qat.yaml so scheduler position
+  # remains meaningful when loaded from ckpt
+  epochs: 40
+  batch_size: 64
+  lr: 1.0e-4
+  weight_decay: 0.01
+  lr_warmup_ratio: 0.10
+  grad_clip: 1.0
+
+  # QAT — UNCHANGED. start_epoch=10 (from ckpt) >= qat_warmup_epochs=5,
+  # so trainer sets lambda=1 immediately on swap (no warmup re-run).
+  enable_qat: true
+  qat_warmup_epochs: 5
+  contrastive_w: 0.15
+
+  # Full-state resume (model + optimizer + scheduler + global_step)
+  resume_from: runs/qat-baseline-3ab9e68/checkpoint_ep10.pt
+
+  # Run management — distinct name so we don't overwrite the local run dir
+  run_name: qat-resume-ep10
+  runs_dir: runs
+  save_every: 2
+  log_every_n_steps: 100

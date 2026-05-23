@@ -90,6 +90,13 @@ class TrainConfig(BaseModel):
     # Loads model_state only; optimizer / scheduler / RNG are reset.
     init_from:         Path | None = None
 
+    # Full-state resume (optional — continue a prior run from its last checkpoint).
+    # Loads model + optimizer + scheduler + global_step. The loop picks up at
+    # epoch == ckpt["epoch"] and runs to `epochs`. Distinct from init_from: this
+    # is for resuming the SAME run shape (architecture, scheduler horizon),
+    # init_from is for cross-recipe warm-starts.
+    resume_from:       Path | None = None
+
     # Run management
     run_name:          str
     runs_dir:          Path  = Path("runs")

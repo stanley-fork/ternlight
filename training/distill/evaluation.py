@@ -26,16 +26,17 @@ Phase 3's value proposition.
 
 Usage
 -----
-    python evaluate.py --config configs/micro-eval.yaml
+    python evaluation.py --config configs/micro-eval.yaml
 
 Output
 ------
-    runs/<run_name>-<sha>/
-      scorecard.json   machine-readable; committed to repo
-      scorecard.md     human-readable; paste-able into PRs/READMEs
+    stdout (grouped by bucket) + wandb.log(). No committed file format yet —
+    we'll add one after we've used the print version enough to know what's
+    worth freezing.
 """
 
 import argparse
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -127,9 +128,14 @@ def load_for_eval(ckpt_path: Path, device: str) -> EvalModel:
         n_swapped = ternary_qat.swap(model)
         ternary_qat.set_lambda(model, 1.0)
         print(f"  swapped {n_swapped} nn.Linear → BitLinear (lambda=1)")
-        stats = ternary_qat.ternarize_embedding_(model)
-        embedding_ternarized = True
-        print(f"  ternarized embedding: scale={stats['scale']:.4f}  zero_frac={stats['zero_fraction']:.3f}")
+        # DEBUG env var: skip embedding ternarization to isolate its quality cost.
+        # Remove once we know whether we want this as a permanent toggle.
+        if os.getenv("TERNLIGHT_SKIP_EMBED_TERNARIZE"):
+            print(f"  ⚠ TERNLIGHT_SKIP_EMBED_TERNARIZE set — embedding stays fp32 (ablation mode)")
+        else:
+            stats = ternary_qat.ternarize_embedding_(model)
+            embedding_ternarized = True
+            print(f"  ternarized embedding: scale={stats['scale']:.4f}  zero_frac={stats['zero_fraction']:.3f}")
 
     model.to(device).eval()
     return EvalModel(

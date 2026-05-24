@@ -76,6 +76,41 @@ def zero_fractions(model: nn.Module) -> dict[str, float]:
     return fracs
 
 
+def int8_quantize_embedding_(model: nn.Module, mode: str = "per_row") -> dict[str, float]:
+    """Post-training: int8-quantize the embedding table in place (per-row scale).
+
+    1. Per-row scale s_i = max(|W_i|) / 127
+    2. q_i = round(W_i / s_i).clamp(-128, 127)
+    3. Replace W_i with (q_i * s_i) — the exact int8-representable value
+
+    The weight tensor stays fp32 dtype for downstream PyTorch compatibility;
+    only the *values* become int8-representable. Forward-pass numerics now
+    match what the engine's int8 loader will produce from a packed .bin.
+
+    Per-row scaling preserves dynamic range per token (different tokens have
+    wildly different magnitudes); per-tensor scaling collapses that range.
+    Skips the padding row (index 0), matching ternarize_embedding_().
+
+    Returns {scale_min, scale_max, scale_mean} for sanity logging.
+
+    Used by evaluate.py (Phase 4 ablation) and pack/pack.py (Phase 5 emit).
+    """
+    if mode != "per_row":
+        raise NotImplementedError(f"int8 quantization mode {mode!r} not supported (use 'per_row')")
+
+    with torch.no_grad():
+        w = model.embedding.weight
+        emb = w[1:]   # skip padding row
+        scales = (emb.abs().amax(dim=1) / 127.0).clamp(min=1e-8)
+        q = (emb / scales.unsqueeze(1)).round().clamp(-128, 127)
+        w[1:] = q * scales.unsqueeze(1)
+    return {
+        "scale_min":  scales.min().item(),
+        "scale_max":  scales.max().item(),
+        "scale_mean": scales.mean().item(),
+    }
+
+
 def ternarize_embedding_(model: nn.Module) -> dict[str, float]:
     """Post-training: snap the embedding table to ternary {-1, 0, +1} in place.
 

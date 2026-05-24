@@ -36,7 +36,7 @@ Output
 """
 
 import argparse
-import os
+import math
 import subprocess
 import time
 from dataclasses import dataclass
@@ -47,7 +47,9 @@ import evaluate as hf_evaluate
 import torch
 import torch.nn as nn
 import wandb
+from datasets import load_dataset
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
 import ternary_qat
 from config  import EvalConfig, load_config
@@ -84,20 +86,26 @@ class EvalModel:
     src_epoch:        int          # ckpt["epoch"]
     src_run_name:     str          # ckpt["config"]["run_name"]
     src_config:       dict         # ckpt["config"] verbatim
-    embedding_ternarized: bool     # did we apply ternarize_embedding_()?
+    embedding_format: str          # "fp32" | "int8" | "ternary" — what we applied at load time
 
 
-def load_for_eval(ckpt_path: Path, device: str) -> EvalModel:
+def load_for_eval(ckpt_path: Path, device: str, embedding_format: str = "ternary") -> EvalModel:
     """Load a ckpt and prepare it for honest eval.
 
-    For QAT ckpts: swap nn.Linear → BitLinear, set λ=1, ternarize the embedding.
-    For fp32 ckpts: load as-is (no swap, no embedding ternarization).
+    For QAT ckpts: swap nn.Linear → BitLinear, set λ=1, apply the requested
+    embedding-format PTQ.
+    For fp32 ckpts: load as-is. `embedding_format` is ignored — the baseline
+    is the control, never gets quantized.
 
-    Why ternarize embedding here, not during training: the embedding table is
-    NOT touched by QAT — BitLinear only replaces nn.Linear. But the shipped
-    .bin will have a ternary embedding (82% of params, otherwise blows the
-    size budget). Eval-time ternarization makes the scorecard honest about
-    what we'll ship.
+    The embedding table is NOT touched during QAT (BitLinear only replaces
+    nn.Linear). Whatever embedding precision the shipped .bin uses must be
+    applied here at eval time so the scorecard reflects the model we'll ship,
+    not the fp32 shadow we trained with.
+
+    embedding_format options (QAT only):
+      - "ternary": snap to {-1, 0, +1} via AbsMean threshold (current shipped default)
+      - "int8":    per-row int8 PTQ (likely-quality alt; ~8 MB packed)
+      - "fp32":    leave embedding untouched (control; ~31 MB packed — ablation only)
     """
     print(f"→ Loading ckpt: {ckpt_path}")
     ckpt = torch.load(ckpt_path, weights_only=False, map_location="cpu")
@@ -123,25 +131,30 @@ def load_for_eval(ckpt_path: Path, device: str) -> EvalModel:
     # keys ('weight', 'bias'), so this loads cleanly for both fp32 and QAT.
     model.load_state_dict(ckpt["model_state"])
 
-    embedding_ternarized = False
+    applied_format = "fp32"   # default for the fp32 baseline path
     if is_qat:
         n_swapped = ternary_qat.swap(model)
         ternary_qat.set_lambda(model, 1.0)
         print(f"  swapped {n_swapped} nn.Linear → BitLinear (lambda=1)")
-        # DEBUG env var: skip embedding ternarization to isolate its quality cost.
-        # Remove once we know whether we want this as a permanent toggle.
-        if os.getenv("TERNLIGHT_SKIP_EMBED_TERNARIZE"):
-            print(f"  ⚠ TERNLIGHT_SKIP_EMBED_TERNARIZE set — embedding stays fp32 (ablation mode)")
-        else:
+        if embedding_format == "fp32":
+            print(f"  embedding stays fp32 (no PTQ — ablation control)")
+            applied_format = "fp32"
+        elif embedding_format == "int8":
+            stats = ternary_qat.int8_quantize_embedding_(model)
+            print(f"  int8-PTQ embedding: scale ∈ [{stats['scale_min']:.4f}, {stats['scale_max']:.4f}]  mean={stats['scale_mean']:.4f}")
+            applied_format = "int8"
+        elif embedding_format == "ternary":
             stats = ternary_qat.ternarize_embedding_(model)
-            embedding_ternarized = True
             print(f"  ternarized embedding: scale={stats['scale']:.4f}  zero_frac={stats['zero_fraction']:.3f}")
+            applied_format = "ternary"
+        else:
+            raise ValueError(f"Unknown embedding_format: {embedding_format!r}")
 
     model.to(device).eval()
     return EvalModel(
         model=model, is_qat=is_qat, src_epoch=src_epoch,
         src_run_name=src_run, src_config=src_cfg,
-        embedding_ternarized=embedding_ternarized,
+        embedding_format=applied_format,
     )
 
 
@@ -241,29 +254,108 @@ def eval_stsb(em: EvalModel, ecfg: EvalConfig, device: str) -> dict[str, float]:
 # ── Task 3: retrieval (small BEIR task) ───────────────────────────────────────
 
 def eval_retrieval(em: EvalModel, ecfg: EvalConfig, device: str) -> dict[str, float]:
-    """Retrieval NDCG@10 on a small BEIR corpus. The product question:
-    does it actually retrieve semantically similar docs?
+    """Retrieval NDCG@10 + Recall@{1,5,10} on a small BEIR corpus.
 
-    TODO: implement.
-      - Load: datasets.load_dataset(ecfg.retrieval_dataset, ...) — corpus, queries, qrels
-        SciFact: ~1.4k corpus / 300 queries / qrels — fits comfortably in memory.
-      - Encode all corpus docs (one batched forward pass)
-      - Encode all queries
-      - For each query: cosine vs all corpus → top-10
-      - Compute NDCG@10 against qrels. Either `ranx`/`pytrec_eval`, or
-        hand-roll since the dataset is small.
+    The product question: does the model actually retrieve semantically similar
+    docs under cosine similarity? STS-B and Spearman are *similarity* metrics;
+    retrieval is the harder test. They can diverge — a model can score well on
+    STS-B but rank poorly under cosine. For a "ships as semantic search
+    library" demo, this is the load-bearing number.
 
-    Why this metric: STS-B is similarity, this is *retrieval*. They can
-    diverge — a model can score well on STS-B but rank poorly under cosine.
-    For a "ships as semantic search library" demo, retrieval is the harder
-    test.
+    Dataset: BeIR/scifact — ~5.2k corpus / ~1.1k queries / ~300 test qrels.
+    Fits comfortably in memory; we encode corpus + queries with the same
+    tokenizer used in training prep (bert-base-uncased, max_len=128).
+
+    Metric implementations are hand-rolled (no ranx/pytrec_eval dep) — dataset
+    is small enough that the standard formulas are ~20 lines.
     """
-    print(f"\n→ Task 3/3: retrieval ({ecfg.retrieval_dataset})  [TODO — stubbed]")
-    return {
-        "retrieval/ndcg@10":     float("nan"),
-        "retrieval/recall@10":   float("nan"),
-        "retrieval/_status":     "not_implemented",
+    print(f"\n→ Task 3/3: retrieval ({ecfg.retrieval_dataset})")
+
+    # ── Load corpus, queries, qrels ──────────────────────────────────────────
+    corpus  = load_dataset(ecfg.retrieval_dataset, "corpus",  split="corpus")
+    queries = load_dataset(ecfg.retrieval_dataset, "queries", split="queries")
+    qrels   = load_dataset(f"{ecfg.retrieval_dataset}-qrels", split="test")
+
+    # qrels: {query_id → {corpus_id → relevance}}. SciFact is binary (rel=1).
+    qrels_by_query: dict[str, dict[str, int]] = {}
+    for row in qrels:
+        qid = str(row["query-id"])
+        cid = str(row["corpus-id"])
+        qrels_by_query.setdefault(qid, {})[cid] = int(row["score"])
+
+    # Filter queries → only those with at least one relevant doc in test qrels.
+    queries = [q for q in queries if str(q["_id"]) in qrels_by_query]
+    print(f"  corpus={len(corpus)}  queries={len(queries)}  qrels-queries={len(qrels_by_query)}")
+
+    # ── Tokenize + encode ────────────────────────────────────────────────────
+    # Match training prep: bert-base-uncased, max_len=128. Concat title + text
+    # for corpus docs (BEIR convention); query is just the text field.
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    max_len = 128
+    bs = ecfg.batch_size
+
+    @torch.no_grad()
+    def encode(texts: list[str]) -> torch.Tensor:
+        out_chunks: list[torch.Tensor] = []
+        for i in range(0, len(texts), bs):
+            toks = tokenizer(texts[i:i+bs], padding=True, truncation=True,
+                             max_length=max_len, return_tensors="pt")
+            embs = em.model(toks["input_ids"].to(device),
+                            toks["attention_mask"].to(device))
+            out_chunks.append(embs.cpu())
+        return torch.cat(out_chunks, dim=0)
+
+    t0 = time.time()
+    corpus_ids   = [str(c["_id"]) for c in corpus]
+    corpus_texts = [(c.get("title", "") + " " + c.get("text", "")).strip() for c in corpus]
+    corpus_embs  = encode(corpus_texts)                                          # [N_c, output_dim]
+
+    query_ids   = [str(q["_id"]) for q in queries]
+    query_texts = [q["text"] for q in queries]
+    query_embs  = encode(query_texts)                                            # [N_q, output_dim]
+    encode_elapsed = time.time() - t0
+
+    # ── Top-10 by cosine (both already L2-normalized at the model output) ────
+    sims = query_embs @ corpus_embs.T                                            # [N_q, N_c]
+    top10 = sims.topk(k=10, dim=1).indices.tolist()                              # [N_q][10]
+
+    # ── NDCG@10 + Recall@{1, 5, 10}, micro-averaged across queries ──────────
+    ndcg10_sum = 0.0
+    recall_sums = {1: 0.0, 5: 0.0, 10: 0.0}
+    n_eval = 0
+    for q_idx, qid in enumerate(query_ids):
+        rel_map = qrels_by_query[qid]                                            # {cid → rel}
+        n_relevant = sum(1 for r in rel_map.values() if r > 0)
+        if n_relevant == 0:
+            continue
+
+        retrieved = [corpus_ids[i] for i in top10[q_idx]]                        # top-10 cids
+        rels_at_rank = [rel_map.get(cid, 0) for cid in retrieved]                # graded rels
+
+        # NDCG@10 — formula: DCG_k = Σ rel_i / log2(i + 2), i starts at 0
+        dcg = sum(r / math.log2(rank + 2) for rank, r in enumerate(rels_at_rank) if r > 0)
+        ideal_rels = sorted(rel_map.values(), reverse=True)[:10]
+        idcg = sum(r / math.log2(rank + 2) for rank, r in enumerate(ideal_rels) if r > 0)
+        ndcg10_sum += (dcg / idcg) if idcg > 0 else 0.0
+
+        for k in recall_sums:
+            hits = sum(1 for r in rels_at_rank[:k] if r > 0)
+            recall_sums[k] += hits / n_relevant
+        n_eval += 1
+
+    metrics = {
+        "retrieval/ndcg@10":        ndcg10_sum   / n_eval if n_eval else float("nan"),
+        "retrieval/recall@1":       recall_sums[1]  / n_eval if n_eval else float("nan"),
+        "retrieval/recall@5":       recall_sums[5]  / n_eval if n_eval else float("nan"),
+        "retrieval/recall@10":      recall_sums[10] / n_eval if n_eval else float("nan"),
+        "retrieval/n_queries":      n_eval,
+        "retrieval/n_corpus":       len(corpus_ids),
+        "retrieval/encode_seconds": round(encode_elapsed, 1),
     }
+    print(f"  retrieval/ndcg@10     = {metrics['retrieval/ndcg@10']:.4f}")
+    print(f"  retrieval/recall@10   = {metrics['retrieval/recall@10']:.4f}  "
+          f"(@5={metrics['retrieval/recall@5']:.4f}, @1={metrics['retrieval/recall@1']:.4f})")
+    return metrics
 
 
 # ── Bucket C: QAT health (cheap, informative) ─────────────────────────────────
@@ -349,7 +441,7 @@ def print_results(
     print(f"\n{'='*60}")
     print(f"  Phase 4 eval results")
     print(f"{'='*60}")
-    print(f"  QAT:  {qat_em.src_run_name}  ep{qat_em.src_epoch}  (embedding_ternarized={qat_em.embedding_ternarized})")
+    print(f"  QAT:  {qat_em.src_run_name}  ep{qat_em.src_epoch}  (embedding_format={qat_em.embedding_format})")
     if fp32_em is not None:
         print(f"  fp32: {fp32_em.src_run_name}  ep{fp32_em.src_epoch}")
 
@@ -357,7 +449,8 @@ def print_results(
     print(f"\n  Quality")
     for k in ("test/spearman", "test/distill_loss",
               "stsb/spearman", "stsb/pearson",
-              "retrieval/ndcg@10", "retrieval/recall@10"):
+              "retrieval/ndcg@10",
+              "retrieval/recall@1", "retrieval/recall@5", "retrieval/recall@10"):
         qat_v  = qat_metrics.get(k)
         fp32_v = fp32_metrics.get(f"fp32_{k}")
         delta  = gaps.get(f"{k}_delta_qat_vs_fp32")
@@ -393,46 +486,49 @@ def _fmt(v, signed: bool = False) -> str:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(config_path: Path) -> None:
+def main(config_path: Path, embedding_format: str) -> None:
     cfg = load_config(config_path)
     if cfg.eval is None:
         raise ValueError(f"Config {config_path} has no `eval:` section.")
     ecfg = cfg.eval
 
     device = best_device()
-    print(f"Device: {device}\n")
+    print(f"Device: {device}  |  embedding_format={embedding_format}\n")
 
-    # ── Load QAT ckpt ─────────────────────────────────────────────────────────
-    qat_em = load_for_eval(ecfg.ckpt_path, device)
+    # ── Load QAT ckpt with the requested embedding-format PTQ ────────────────
+    qat_em = load_for_eval(ecfg.ckpt_path, device, embedding_format=embedding_format)
 
     # ── W&B (flexible view; not a format commitment) ──────────────────────────
     short_sha = git_commit()[:7]
-    full_run_name = f"{ecfg.run_name}-{short_sha}"
+    full_run_name = f"{ecfg.run_name}-emb-{embedding_format}-{short_sha}"
     wandb.init(
         project = cfg.wandb_project,
         group   = cfg.wandb_group,
         job_type= "eval",
         name    = full_run_name,
-        tags    = cfg.wandb_tags,
+        tags    = list(cfg.wandb_tags) + [f"embedding:{embedding_format}"],
         config  = {
             **ecfg.model_dump(mode="json"),
             "code_commit":       git_commit(),
             "device":            device,
+            "embedding_format":  embedding_format,
             "qat_src_run":       qat_em.src_run_name,
             "qat_src_epoch":     qat_em.src_epoch,
         },
     )
 
     # ── Run all tasks on the QAT model ────────────────────────────────────────
-    print(f"\n{'='*60}\n  Evaluating QAT ckpt (ep{qat_em.src_epoch})\n{'='*60}")
+    print(f"\n{'='*60}\n  Evaluating QAT ckpt (ep{qat_em.src_epoch}, embedding={qat_em.embedding_format})\n{'='*60}")
     qat_metrics = run_all_tasks(qat_em, ecfg, device)
 
     # ── Optional: same tasks on fp32 baseline for gap computation ─────────────
+    # Baseline is always loaded with embedding_format="fp32" — it's the control,
+    # quantizing it would defeat the purpose of having a ceiling reference.
     fp32_em = None
     fp32_metrics: dict[str, float] = {}
     if ecfg.baseline_ckpt_path is not None:
         print(f"\n{'='*60}\n  Evaluating fp32 baseline\n{'='*60}")
-        fp32_em = load_for_eval(ecfg.baseline_ckpt_path, device)
+        fp32_em = load_for_eval(ecfg.baseline_ckpt_path, device, embedding_format="fp32")
         fp32_metrics = run_all_tasks(fp32_em, ecfg, device, prefix="fp32_")
 
     # ── Gaps + stdout + W&B log (no committed file format yet) ────────────────
@@ -447,6 +543,12 @@ def main(config_path: Path) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4 — eval a QAT ckpt")
-    parser.add_argument("--config", type=Path, required=True, help="path to YAML config")
+    parser.add_argument("--config", type=Path, required=True,
+                        help="path to YAML config")
+    parser.add_argument("--embedding-format", choices=("ternary", "int8", "fp32"),
+                        default="ternary",
+                        help="PTQ embedding format to apply at eval time "
+                             "(QAT ckpt only; fp32 baseline is never quantized). "
+                             "Default: ternary (current shipped format).")
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, args.embedding_format)

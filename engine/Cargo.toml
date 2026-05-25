@@ -7,14 +7,22 @@ repository.workspace = true
 description = "Wasm inference engine for the tern semantic embedding model. Compiles to wasm32-unknown-unknown via wasm-pack."
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+# Embedding-format Cargo features. Mutually exclusive — enforced at compile time
+# via compile_error!() in src/lib.rs. Exactly one must be selected per build.
+# See docs/tern-inference-engine.md "Build targets" for the spec.
+[features]
+default     = []
+emb_fp32    = []
+emb_int8    = []
+emb_ternary = []
+emb_int4    = []   # spec'd in wire format (id=3); no current ship target — leave gate live for future packs
 
 [dependencies]
 wasm-bindgen = "0.2"
-tokenizers   = { version = "0.19", default-features = false, features = ["unstable_wasm"] }
-
-[profile.release]
-opt-level = "z"        # optimize for size — wasm-opt -Oz is also applied downstream
-lto       = true
-codegen-units = 1
-strip     = true
+# HF tokenizers — pure-Rust regex (no `onig` C dep), no `esaxx_fast`, `unstable_wasm` enables
+# the wasm32 target. rayon is only used by encode_batch(), which we never call.
+tokenizers   = { version = "0.19", default-features = false, features = ["unstable_wasm", "fancy-regex"] }
+# SHA256 for verifying the trailing 32 bytes of the .bin.
+sha2         = { version = "0.10", default-features = false }

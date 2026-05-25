@@ -1,0 +1,4 @@
+# model.bin is fetched per release, not committed.
+# Build pipeline writes the appropriate packed .bin for the build target's
+# embedding-format feature here before `wasm-pack build`.
+assets/model.bin

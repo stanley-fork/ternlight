@@ -1,27 +1,78 @@
-//! tern-engine — Wasm inference engine for the tern semantic embedding model.
+//! tern-engine — WASM inference engine for the tern semantic embedding model.
 //!
-//! Public surface (wasm-bindgen exports):
-//!   - `embed(text)` — text in, 384-dim L2-normalized Float32Array out
-//!   - `tokenize(text)` — debugging helper, returns token IDs
+//! Loads a packed `.bin` (produced by [`training/pack/pack.py`](../../training/pack/pack.py)),
+//! tokenizes input text via an embedded BERT vocab, runs the BitLinear-faithful
+//! forward pass, and returns a 384-dim L2-normalized embedding.
 //!
-//! Internal modules:
-//!   - tokenizer — HuggingFace BERT tokenizer wrapper (embedded vocab, OnceLock init)
-//!   - model — .bin format parser, weight layout, byte-offset readers
-//!   - inference — forward pass: embedding lookup → attention → FFN → projection → L2 norm
+//! Design + wire-format spec: `docs/tern-inference-engine.md`.
+//! Math reference: the Python implementation in `training/pack/unpack.py`. The
+//! engine's `kernels::bitlinear_forward` must match `unpack.bitlinear_forward`
+//! within the per-format tolerance documented in the engine doc.
 //!
-//! Math reference: docs/training/model-internals.md
-//! Postmortem on the inference math we got wrong initially:
-//!   docs/training/postmortem-bitlinear-asymmetry.md
+//! Build (exactly one embedding feature per build):
+//!   wasm-pack build --target nodejs --features emb_int8       # primary ship
+//!   wasm-pack build --target nodejs --features emb_ternary    # alt ship
+//!   wasm-pack build --target nodejs --features emb_fp32       # parity reference
+
+// ── Compile-time feature exclusivity ────────────────────────────────────────
+// Exactly one of the embedding-format features must be enabled.
+
+#[cfg(not(any(
+    feature = "emb_fp32",
+    feature = "emb_int8",
+    feature = "emb_ternary",
+    feature = "emb_int4",
+)))]
+compile_error!(
+    "tern-engine requires exactly one embedding-format feature: \
+     emb_fp32, emb_int8, emb_ternary, or emb_int4. \
+     Build with e.g. `wasm-pack build --features emb_int8`."
+);
+
+#[cfg(any(
+    all(feature = "emb_fp32", feature = "emb_int8"),
+    all(feature = "emb_fp32", feature = "emb_ternary"),
+    all(feature = "emb_fp32", feature = "emb_int4"),
+    all(feature = "emb_int8", feature = "emb_ternary"),
+    all(feature = "emb_int8", feature = "emb_int4"),
+    all(feature = "emb_ternary", feature = "emb_int4"),
+))]
+compile_error!(
+    "tern-engine accepts exactly one embedding-format feature; \
+     multiple were enabled. Pick one of: emb_fp32 | emb_int8 | emb_ternary | emb_int4."
+);
+
+// ── Modules ─────────────────────────────────────────────────────────────────
+
+pub mod format;
+pub mod tokenizer;
+pub mod model;
+pub mod kernels;
+pub mod inference;
+
+// ── Public WASM surface ─────────────────────────────────────────────────────
 
 use wasm_bindgen::prelude::*;
 
-// TODO: port modules from prototype:
-//   mod inference;
-//   mod model;
-//   mod tokenizer;
-
-/// Smoke-test export. Replace with the real `embed()` once modules are ported.
+/// Primary entry point: text → 384-dim L2-normalized embedding.
+///
+/// Tokenizes via the embedded BERT vocab, runs the full forward pass against
+/// the embedded `.bin`, returns the output vector.
 #[wasm_bindgen]
-pub fn hello(input: &str) -> usize {
-    input.len()
+pub fn embed(text: &str) -> Vec<f32> {
+    inference::embed(text)
+}
+
+/// Debug helper: returns token IDs the tokenizer produced. Used by per-stage
+/// parity tests to confirm tokenization matches the Python `tokenizers` library.
+#[wasm_bindgen]
+pub fn tokenize(text: &str) -> Vec<u32> {
+    tokenizer::tokenize(text)
+}
+
+/// Debug helper: returns a human-readable summary of the loaded model's
+/// header (format version, embedding format, dimensions, vocab size).
+#[wasm_bindgen]
+pub fn config_summary() -> String {
+    model::config_summary()
 }

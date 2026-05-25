@@ -301,3 +301,77 @@ When student and teacher have different hidden dimensions (the common case for c
 **The opportunity:** Full TypeScript type definitions, JSDoc annotations, and an ergonomic API surface — particularly for the `classify(text, labels)` pattern where the label type and return type can be made strongly typed. This is table stakes for adoption in TypeScript-first projects.
 
 **Implementation complexity:** Low. Pure documentation and `.d.ts` authoring.
+
+---
+
+## 16. `.bin` Format: Tighter Packing & Compression Options
+
+**Current approach:** Wire format v1 stores ternary values at 2 bits each (4 per byte). Output projection stays fp32 by design (per the bitlinear-asymmetry postmortem). No transport-layer compression assumed at the format level — the `.bin` ships as-is. Total packed size for the ternary build: ~2.8 MB.
+
+**The opportunity:** Several orthogonal byte-savings are available. None are urgent — the current 2.8 MB is small in absolute terms — but capturing them so the option isn't lost. All are lossless and reversible; users get identical model quality.
+
+### 16.1 Tight ternary packing — 5 values per byte (1.585 bits/value)
+
+The 2-bit-per-value encoding is 21% over the information-theoretic minimum for ternary data (`log₂(3) ≈ 1.585` bits). Five ternary values can fit in one byte using base-3 encoding:
+
+```
+byte = t₀·1 + t₁·3 + t₂·9 + t₃·27 + t₄·81
+       where each tᵢ ∈ {0, 1, 2}  (mapped from {-1, 0, +1})
+
+byte ∈ [0, 242]  (= 2 + 6 + 18 + 54 + 162)
+       leaving codes 243..255 as "should never appear" / reserved for error signal
+```
+
+Decode: extract digits via `(byte / 3ᵏ) mod 3` for k = 0..4. Production implementation uses a precomputed ~1.2 KB lookup table (`u8 → [i8; 5]`) — one memory load + five reads per byte, competitive with bit-shifts.
+
+**Storage win** for the current architecture (vocab=30522, d_model=256):
+
+| Section | v1 (2-bit) | tight (1.585-bit) | Savings |
+|---|---|---|---|
+| Embedding packed | ~1.86 MB | ~1.51 MB | −358 KB (−19%) |
+| BitLinear weights | ~400 KB | ~325 KB | −75 KB (−19%) |
+| **Total `.bin`** | **~2.8 MB** | **~2.3 MB** | **−500 KB (−18%)** |
+
+**Cost (engineering / format complexity):**
+- Decoder is more code (LUT + base-3 logic + invalid-code handling)
+- New unit tests for encode/decode parity
+- Format-version migration (v1 → v2)
+- WASM SIMD is awkward with base-3 (which loves powers of 2) — the LUT approach scalarizes well, but vectorized decode is more involved
+
+**Cost (runtime):** negligible — see 16.4 below.
+
+**When to revisit:** if bundle download size becomes a load-bearing UX constraint (mobile-first, very slow connections) AND the ship target ends up being ternary embedding (currently int8 per Phase 4 Stage A in `tern-training-pipeline.md`). Otherwise unjustified given the engineering tax.
+
+### 16.2 Transport-layer compression (NOT a format change)
+
+`Content-Encoding: gzip` (or brotli) at the HTTP layer compresses on-the-wire bytes without any engine code change. Modern CDNs do this automatically. Recovers ~10% of the `.bin` size (limited because most of the file is high-entropy packed ternary, low redundancy left to squeeze).
+
+This is the right "first" answer for download-size optimization. It composes with tight packing if both are applied — gzip after tight packing recovers less (already higher entropy), but stacking gets to ~2.0 MB on the wire from the current 2.8 MB.
+
+Note: belongs in deployment / CDN config, not in the engine repo. Captured here so the option isn't conflated with format work.
+
+### 16.3 Other deferred byte-savings (not yet evaluated)
+
+- **Sparse embedding rows.** If a meaningful fraction of vocab rows are all-zero (rare/unused tokens), a "row presence" bitmap + skipping zero rows could cut more bytes. Hasn't been measured; likely worth ~10–20% on the embedding if zero rows are common, ~0% if not. Worth measuring after the first real production training run.
+- **fp16 output projection.** Currently fp32 (~385 KB, 13% of `.bin`). Half-precision would save ~190 KB at near-zero quality cost — easier engineering win than tight ternary packing, but only ~7% on the total `.bin`.
+- **True 1.58-bit packing** (vs 5-in-8 = 1.6 bits). Would need a variable-rate encoding (Huffman-style) — too much complexity for the marginal extra savings over 16.1.
+
+### 16.4 Performance notes — why tight packing wouldn't slow users down
+
+Unpack work happens in two distinct places with very different cost profiles:
+
+**Per query (embedding lookup):**
+- Per token: load packed row (~52 B tight vs ~64 B v1) → unpack 256 ternary → multiply by per-row scale
+- 30-token query: ~2 µs of unpack work either way
+- Less than 0.05% of total inference time (~5–20 ms per query)
+
+**Per engine load (BitLinear weight unpack):**
+- Pre-expand all ternary weights to in-memory format once at init (NEVER unpack per-matmul — that would defeat the purpose of having packed weights to begin with)
+- Total ~1.6 M ternary values for the current architecture → ~1.5 ms at engine init
+- ~1% of cold-start time, dominated elsewhere by network + WASM instantiation
+
+End-to-end: unpack cost is microseconds per query and milliseconds at load for any reasonable ternary encoding scheme. The bytes-on-disk question and the user-side runtime question are essentially decoupled.
+
+**Cross-reference:** Section 5 (Higher-Precision Embedding Table) is the *opposite* direction — bigger files for better quality. Section 16 is tighter packing for smaller files at same quality. The two are orthogonal — both could be applied independently. Phase 4 Stage A (see `tern-training-pipeline.md`) settled int8 as the ship embedding format, partially superseding Section 5's framing.
+
+**Implementation complexity:** Medium for 16.1 (decoder + LUT + format-version migration + parity tests). Low for 16.2 (CDN configuration only). Variable for 16.3 (sparse-rows measurement is cheap; fp16 projection is straightforward; true 1.58-bit is high).

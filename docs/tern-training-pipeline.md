@@ -156,6 +156,36 @@ Concrete work needed to fully close Phase 4 and unblock Phase 5's pack-format de
 - Embedding QAT — would require retraining; revisit only if PTQ-int8 doesn't recover quality
 - Retrieval on additional BEIR domains — SciFact is the v1; multi-domain is a release-scorecard concern
 
+### Stage A results (2026-05-24)
+
+Three-way embedding-format sweep on the ep40 QAT ckpt against BeIR/SciFact (5,183 corpus docs, 300 test queries):
+
+| Metric | ternary | int8 | fp32 |
+|---|---|---|---|
+| `test/spearman` | 0.6958 | **0.8278** | 0.8277 |
+| `retrieval/ndcg@10` | 0.4223 | **0.4504** | 0.4484 |
+| `retrieval/recall@1` | 0.2903 | **0.3086** | 0.3019 |
+| `retrieval/recall@5` | 0.4669 | 0.5131 | **0.5181** |
+| `retrieval/recall@10` | 0.5665 | 0.5969 | **0.6003** |
+| Bundle (est) | ~6 MB | ~8 MB | ~31 MB |
+
+**Two findings drove the verdict:**
+
+1. **Retrieval doesn't track Spearman.** The ternary embedding's −0.167 Spearman gap (vs fp32 baseline) shrinks to a −0.021 NDCG@10 gap. Spearman over-penalizes the fine-grained pairwise ordering that UI top-K retrieval doesn't depend on. Lesson: the metric that maps to the product question (NDCG@K, recall@K) is the load-bearing one for ship decisions; Spearman is diagnostic-only.
+
+2. **fp32 is Pareto-dominated by int8.** int8 matches fp32 on every quality metric within measurement noise (300 queries), at 4× smaller bundle. The Pareto frontier collapsed from {ternary, int8, fp32} to **{ternary, int8}** — fp32 is never the right ship target for this model.
+
+**Verdict: ship int8 as primary, keep ternary as size-constrained alt build.** Drivers for picking int8 over ternary on the remaining frontier:
+
+- `recall@5` = 0.513 vs 0.467 = +10% relative — meaningful "top-5 visible UX" gain
+- `recall@1` = 0.309 vs 0.290 = +6.7% relative — "lucky pick" UX gain
+- +2 MB bundle cost is modest given the quality lift
+- int8 essentially matches the fp32 quality ceiling — no headroom left above int8 to capture
+
+Ternary remains a defensible alt build for download-size-constrained targets. Engine build matrix and Cargo-feature wiring documented in [tern-inference-engine.md](tern-inference-engine.md#build-targets).
+
+**Stage A closes Phase 4.** Quality scorecard exists, embedding-format decision locked. Next: Phase 5 (pack) — primary target int8, alt target ternary, fp32 retained only as a parity-verification reference build.
+
 ---
 
 ## Phase 5 — Pack (`.pt` → `.bin`)
@@ -199,4 +229,3 @@ Anything FAIL → NO-GO. Anything MARGINAL → consider d_model=384 (small tier)
 - **Cloud GPU escalation criteria**: at what wall-clock does local M-series stop being viable? Suggested: if Phase 3 full run exceeds 48h wall-clock, move to single cloud GPU for the next run.
 - **MTEB subset selection**: 4–6 subsets chosen for UI-search relevance, but exact list TBD.
 - **Quora paraphrase pairs ratio inside `embedding-training-data`**: the meta-dataset's mix may not weight Quora high enough for the UI-demo target. May need to over-sample Quora within the 40% allocation.
-- **Embedding quantization format**: first-run finding (above) shows ternary embedding costs −13 Spearman vs fp32, dominating total quality loss. Candidates to compare under retrieval (NDCG@10), not Spearman alone: ternary (~6 MB, current default), int8 per-row PTQ (~8 MB, likely preserves most quality, no retraining needed), fp32 (~31 MB, likely busts bundle budget). Decision blocked on retrieval numbers from the BEIR task.

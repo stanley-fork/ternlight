@@ -26,3 +26,5 @@ wasm-bindgen = "0.2"
 tokenizers   = { version = "0.19", default-features = false, features = ["unstable_wasm", "fancy-regex"] }
 # SHA256 for verifying the trailing 32 bytes of the .bin.
 sha2         = { version = "0.10", default-features = false }
+# erff for GELU — matches torch's `F.gelu(approximate='none')` (the default).
+libm         = { version = "0.2", default-features = false }

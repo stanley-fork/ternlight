@@ -1,0 +1,4 @@
+# Machine-specific perf measurements — never committed.
+# Curated baselines live in docs/tern-inference-engine.md "Target-device perf".
+*.json
+!.gitignore

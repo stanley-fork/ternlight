@@ -1,0 +1,82 @@
+[
+  {
+    "label": "identity",
+    "a": "hello world",
+    "b": "hello world",
+    "expected_low": 0.995,
+    "expected_high": 1.001,
+    "notes": "Identity — model determinism + L2-normalization sanity. Anything below 0.999 indicates noise."
+  },
+  {
+    "label": "paraphrase-high-overlap",
+    "a": "how do I reset my password",
+    "b": "how can I reset my password",
+    "expected_low": 0.85,
+    "expected_high": 1.0,
+    "notes": "Trivial paraphrase, near-total token overlap. Should score near identity."
+  },
+  {
+    "label": "paraphrase-moderate-overlap",
+    "a": "I forgot my password",
+    "b": "how do I reset my password",
+    "expected_low": 0.60,
+    "expected_high": 0.95,
+    "notes": "Realistic search query pair; some shared content words."
+  },
+  {
+    "label": "paraphrase-no-overlap",
+    "a": "cancel my subscription",
+    "b": "how do I unsubscribe",
+    "expected_low": null,
+    "expected_high": null,
+    "notes": "Paraphrase with ZERO shared content words. Probes lexical-overlap weakness (tern-future-work §13). TBD verdict — informational."
+  },
+  {
+    "label": "same-domain-related",
+    "a": "oauth token expired",
+    "b": "refresh oauth access token",
+    "expected_low": 0.45,
+    "expected_high": 0.85,
+    "notes": "Same domain, related actions, shared domain tokens. Typical developer query distribution."
+  },
+  {
+    "label": "same-template-diff-topic",
+    "a": "how to install Python",
+    "b": "how to install JavaScript",
+    "expected_low": 0.40,
+    "expected_high": 0.90,
+    "notes": "Probes whether the model favors syntactic structure or content. Interesting either way."
+  },
+  {
+    "label": "related-concepts-no-overlap",
+    "a": "machine learning model",
+    "b": "neural network architecture",
+    "expected_low": 0.30,
+    "expected_high": 0.80,
+    "notes": "Conceptually related, no shared tokens. Tests learned semantic understanding."
+  },
+  {
+    "label": "antonym-probe",
+    "a": "I love this product",
+    "b": "I hate this product",
+    "expected_low": null,
+    "expected_high": null,
+    "notes": "Antonym / negation probe. Embedding models often miss this — same template + topic, opposite sentiment. TBD verdict — informational."
+  },
+  {
+    "label": "negative-anchor",
+    "a": "reset password",
+    "b": "the weather is nice today",
+    "expected_low": 0.0,
+    "expected_high": 0.35,
+    "notes": "Completely unrelated topics. Hard negative anchor — should be clearly low."
+  },
+  {
+    "label": "gibberish-negative",
+    "a": "asdfgh qwerty",
+    "b": "how to fix a bug",
+    "expected_low": 0.0,
+    "expected_high": 0.30,
+    "notes": "Out-of-vocab garbage vs sensible. Secondary negative anchor."
+  }
+]

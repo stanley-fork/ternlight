@@ -75,20 +75,19 @@ pub fn embed(text: &str) -> Vec<f32> {
     let mut scores        = vec![0.0f32; n_heads * seq_len * seq_len];
 
     // ── 3) Per-layer transformer blocks ─────────────────────────────────────
+    // BitLinear weights are pre-unpacked to `i8 {-1, 0, +1}` at engine init
+    // (Phase A3), so we read them directly out of `RuntimeWeights` — no more
+    // per-call slicing into `m.body` for the weight bytes.
     for layer_idx in 0..n_layers {
-        let l_layout = &m.layout.layers[layer_idx];
-        let lw       = &m.weights.layers[layer_idx];
+        let lw = &m.weights.layers[layer_idx];
 
         // Pre-LN attention
         parametric_layer_norm(&x, &lw.ln1_w, &lw.ln1_b, n_active, d_model, &mut x_norm);
 
         // Q / K / V (no bias)
-        let wq_packed = &m.body[l_layout.w_q.weights_offset..l_layout.w_q.weights_offset + l_layout.w_q.weights_bytes];
-        let wk_packed = &m.body[l_layout.w_k.weights_offset..l_layout.w_k.weights_offset + l_layout.w_k.weights_bytes];
-        let wv_packed = &m.body[l_layout.w_v.weights_offset..l_layout.w_v.weights_offset + l_layout.w_v.weights_bytes];
-        kernels::bitlinear_forward(&x_norm, wq_packed, lw.wq_scale, None, n_active, d_model, d_model, &mut q_buf);
-        kernels::bitlinear_forward(&x_norm, wk_packed, lw.wk_scale, None, n_active, d_model, d_model, &mut k_buf);
-        kernels::bitlinear_forward(&x_norm, wv_packed, lw.wv_scale, None, n_active, d_model, d_model, &mut v_buf);
+        kernels::bitlinear_forward(&x_norm, &lw.wq, lw.wq_scale, None, n_active, d_model, d_model, &mut q_buf);
+        kernels::bitlinear_forward(&x_norm, &lw.wk, lw.wk_scale, None, n_active, d_model, d_model, &mut k_buf);
+        kernels::bitlinear_forward(&x_norm, &lw.wv, lw.wv_scale, None, n_active, d_model, d_model, &mut v_buf);
 
         // Scaled-dot-product attention. After A1 the mask is unnecessary —
         // K and V span only the active prefix, so there are no padding keys
@@ -104,9 +103,8 @@ pub fn embed(text: &str) -> Vec<f32> {
         );
 
         // W_out (with bias) — projects concatenated heads back to d_model
-        let wout_packed = &m.body[l_layout.w_out.weights_offset..l_layout.w_out.weights_offset + l_layout.w_out.weights_bytes];
         kernels::bitlinear_forward(
-            &attn_out, wout_packed, lw.wout_scale, Some(&lw.wout_bias),
+            &attn_out, &lw.wout, lw.wout_scale, Some(&lw.wout_bias),
             n_active, d_model, d_model, &mut attn_residual,
         );
 
@@ -117,9 +115,8 @@ pub fn embed(text: &str) -> Vec<f32> {
         parametric_layer_norm(&x, &lw.ln2_w, &lw.ln2_b, n_active, d_model, &mut x_norm);
 
         // fc1 (with bias) → [n_active, ffn_dim]
-        let fc1_packed = &m.body[l_layout.fc1.weights_offset..l_layout.fc1.weights_offset + l_layout.fc1.weights_bytes];
         kernels::bitlinear_forward(
-            &x_norm, fc1_packed, lw.fc1_scale, Some(&lw.fc1_bias),
+            &x_norm, &lw.fc1, lw.fc1_scale, Some(&lw.fc1_bias),
             n_active, d_model, ffn_dim, &mut ffn_hidden,
         );
 
@@ -128,9 +125,8 @@ pub fn embed(text: &str) -> Vec<f32> {
         gelu_inplace(&mut ffn_hidden[..n_active * ffn_dim]);
 
         // fc2 (with bias) → [n_active, d_model]
-        let fc2_packed = &m.body[l_layout.fc2.weights_offset..l_layout.fc2.weights_offset + l_layout.fc2.weights_bytes];
         kernels::bitlinear_forward(
-            &ffn_hidden, fc2_packed, lw.fc2_scale, Some(&lw.fc2_bias),
+            &ffn_hidden, &lw.fc2, lw.fc2_scale, Some(&lw.fc2_bias),
             n_active, ffn_dim, d_model, &mut ffn_out,
         );
 

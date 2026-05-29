@@ -7,10 +7,15 @@
 //!   4. Pre-decode the small fp32 sections (LN params, scales, biases, projection)
 //!      into typed `Vec<f32>` (`RuntimeWeights`) so the hot path can use them
 //!      without re-parsing bytes on every query.
+//!   5. Pre-unpack the BitLinear ternary weights from 2-bit packed → `i8` so
+//!      the matmul inner loop is branchless (see [Phase A3] in
+//!      `docs/tern-runtime-perf.md`). +4× memory (~384 KB → ~1.5 MB total for
+//!      our 2-layer config), comfortably L2-resident on all targets.
 //!
-//! Big sections stay as byte offsets and are read on demand:
-//!   - Embedding weights (per-token lookup, format-specific)
-//!   - BitLinear packed ternary weights (read inside `kernels::bitlinear_forward`)
+//! The embedding table stays as byte offsets and is read on demand inside
+//! `kernels::embedding_lookup` — too large to keep duplicated alongside the
+//! `include_bytes!` copy, and the lookup itself is essentially a gather, not
+//! a hot inner loop.
 //!
 //! Layout walk mirrors the section order documented in
 //! `docs/tern-inference-engine.md` and produced by `training/pack/pack.py`.
@@ -84,31 +89,43 @@ pub struct WeightLayout {
 
 // ── Pre-decoded fp32 sections (the small stuff used in the hot path) ────────
 
-/// Pre-decoded per-layer fp32 weights and biases.
+/// Pre-decoded per-layer weights and biases.
 ///
-/// Total size for our config: ~10 KB per layer. Decoded once at engine init,
-/// reused for every query.
+/// fp32 sections (LN params, scales, biases) are small (~10 KB per layer).
+/// BitLinear weights are pre-unpacked from 2-bit packed → `i8 {-1, 0, +1}`
+/// once at engine init (Phase A3). Per-layer i8 weight totals for our config:
+/// `wq + wk + wv + wout = 4 × 64 KB = 256 KB`, plus `fc1 + fc2 = 512 KB`,
+/// for ~768 KB per layer × 2 layers ≈ 1.5 MB total — comfortably L2-resident.
+///
+/// Layout convention: `[out_features × in_features]` row-major. Row `j`
+/// occupies indices `j * in_features .. (j+1) * in_features`. Matches the
+/// shape `kernels::bitlinear_forward` expects.
 #[derive(Debug)]
 pub struct LayerWeights {
     pub ln1_w:      Vec<f32>,
     pub ln1_b:      Vec<f32>,
+    pub wq:         Vec<i8>,   // [d_model × d_model]
     pub wq_scale:   f32,
+    pub wk:         Vec<i8>,   // [d_model × d_model]
     pub wk_scale:   f32,
+    pub wv:         Vec<i8>,   // [d_model × d_model]
     pub wv_scale:   f32,
+    pub wout:       Vec<i8>,   // [d_model × d_model]
     pub wout_scale: f32,
     pub wout_bias:  Vec<f32>,
     pub ln2_w:      Vec<f32>,
     pub ln2_b:      Vec<f32>,
+    pub fc1:        Vec<i8>,   // [ffn_dim × d_model]
     pub fc1_scale:  f32,
     pub fc1_bias:   Vec<f32>,
+    pub fc2:        Vec<i8>,   // [d_model × ffn_dim]
     pub fc2_scale:  f32,
     pub fc2_bias:   Vec<f32>,
 }
 
-/// All pre-decoded fp32 sections. Embedding weights and BitLinear packed
-/// weights stay as byte slices in `LoadedModel::body` — they're either too
-/// large to pre-decode (embedding) or already cheap to read (packed weights
-/// are bytes anyway).
+/// All pre-decoded weight sections. The embedding table is the only big
+/// section that stays as a byte offset on `LoadedModel::body` — it's an
+/// O(1) gather per token id, not a hot inner loop.
 #[derive(Debug)]
 pub struct RuntimeWeights {
     /// Per-row scales for the embedding table. Empty for `emb_fp32` builds
@@ -267,15 +284,21 @@ fn decode_runtime_weights(layout: &WeightLayout, body: &[u8]) -> RuntimeWeights 
         layers.push(LayerWeights {
             ln1_w:      read_f32_vec(body, l.ln1_offset,                 d_model),
             ln1_b:      read_f32_vec(body, l.ln1_offset + d_model * 4,   d_model),
+            wq:         unpack_bitlinear(body, &l.w_q),
             wq_scale:   read_f32(body,     l.w_q.scale_offset),
+            wk:         unpack_bitlinear(body, &l.w_k),
             wk_scale:   read_f32(body,     l.w_k.scale_offset),
+            wv:         unpack_bitlinear(body, &l.w_v),
             wv_scale:   read_f32(body,     l.w_v.scale_offset),
+            wout:       unpack_bitlinear(body, &l.w_out),
             wout_scale: read_f32(body,     l.w_out.scale_offset),
             wout_bias:  read_f32_vec(body, l.w_out.bias_offset.expect("W_out has bias"), d_model),
             ln2_w:      read_f32_vec(body, l.ln2_offset,                 d_model),
             ln2_b:      read_f32_vec(body, l.ln2_offset + d_model * 4,   d_model),
+            fc1:        unpack_bitlinear(body, &l.fc1),
             fc1_scale:  read_f32(body,     l.fc1.scale_offset),
             fc1_bias:   read_f32_vec(body, l.fc1.bias_offset.expect("fc1 has bias"), ffn_dim),
+            fc2:        unpack_bitlinear(body, &l.fc2),
             fc2_scale:  read_f32(body,     l.fc2.scale_offset),
             fc2_bias:   read_f32_vec(body, l.fc2.bias_offset.expect("fc2 has bias"), d_model),
         });
@@ -292,6 +315,31 @@ fn decode_runtime_weights(layout: &WeightLayout, body: &[u8]) -> RuntimeWeights 
         ln_final_w, ln_final_b,
         projection_w, projection_b,
     }
+}
+
+// ── BitLinear unpack (2-bit packed → `i8 {-1, 0, +1}`) ──────────────────────
+//
+// Codes: 00 = 0, 01 = +1, 10 = -1, 11 = reserved/pad. Lower bits = lower
+// index (matches the packer in `training/pack/pack.py`). Run once at engine
+// init — see [Phase A3] in `docs/tern-runtime-perf.md`.
+
+fn unpack_bitlinear(body: &[u8], layout: &BitLinearLayout) -> Vec<i8> {
+    let packed = &body[layout.weights_offset..layout.weights_offset + layout.weights_bytes];
+    let n_elems = layout.in_features * layout.out_features;
+    let mut out = Vec::with_capacity(n_elems);
+    for &byte in packed {
+        for sub in 0..4 {
+            let code = (byte >> (sub * 2)) & 0b11;
+            out.push(match code {
+                0b00 =>  0i8,
+                0b01 =>  1i8,
+                0b10 => -1i8,
+                _    =>  0i8,   // reserved — should not appear in valid `.bin`
+            });
+        }
+    }
+    debug_assert_eq!(out.len(), n_elems);
+    out
 }
 
 // ── Byte → fp32 helpers (little-endian, no alignment assumptions) ───────────

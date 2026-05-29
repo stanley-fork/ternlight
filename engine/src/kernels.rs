@@ -9,9 +9,9 @@
 //! `embedding_lookup` matching its embedding-format Cargo feature.
 //!
 //! Performance note: this is the v1 scalar implementation. SIMD acceleration
-//! lives in `docs/tern-future-work.md` §6 (WASM SIMD). Per-call allocations
+//! lives in `docs/tern-runtime-perf.md` → Phase B. Per-call allocations
 //! (LN buffer, x_quant buffer) are acceptable at the current performance
-//! target; revisit if cold-start or per-query latency becomes the constraint.
+//! target; the scratch-buffer-reuse rewrite is Phase C1 in the same doc.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BitLinear forward — NOT feature-gated (BitLinear weights are always ternary)
@@ -29,19 +29,25 @@ const ACTIVATION_RANGE_MAX:   f32 = 128.0;   // max(|range|) for activation_rang
 ///
 /// Math reference: `training/pack/unpack.py::bitlinear_forward`.
 ///
+/// Weights are pre-unpacked from 2-bit packed → `i8 {-1, 0, +1}` once at engine
+/// init (see [Phase A3] in `docs/tern-runtime-perf.md`). The inner loop is then
+/// a clean `i8 × i8 → i32` MAC with no per-element branching — both faster on
+/// scalar (no unpredictable branch on the 33%/33%/33% ternary distribution)
+/// and ready for the SIMD lane shape used by Phase B2 (`i16x8_extmul_low_i8x16`).
+///
 /// # Arguments
 /// - `x`:           `[n_rows × in_features]` fp32 input rows
-/// - `w_packed`:    `[out_features × (in_features / 4)]` bytes, 2-bit packed ternary
-///                  (codes: 00=zero, 01=+1, 10=-1, 11=reserved). Lower bits = lower index.
+/// - `w_unpacked`:  `[out_features × in_features]` row-major `i8` ternary weights
+///                  (values in `{-1, 0, +1}`)
 /// - `w_scale`:     fp32 scale from the packer (one per matrix; AbsMedian-derived)
 /// - `bias`:        optional fp32 bias vector of length `out_features`. None for Q/K/V.
-/// - `n_rows`:      number of input rows to process (sequence length)
-/// - `in_features`: must be a multiple of 4
+/// - `n_rows`:      number of input rows to process
+/// - `in_features`
 /// - `out_features`
 /// - `out`:         `[n_rows × out_features]` output buffer, fp32
 pub fn bitlinear_forward(
     x:            &[f32],
-    w_packed:     &[u8],
+    w_unpacked:   &[i8],
     w_scale:      f32,
     bias:         Option<&[f32]>,
     n_rows:       usize,
@@ -54,9 +60,7 @@ pub fn bitlinear_forward(
     // prefix. We only touch the first n_rows * stride elements either way.
     debug_assert!(x.len()   >= n_rows * in_features);
     debug_assert!(out.len() >= n_rows * out_features);
-    debug_assert_eq!(in_features % 4, 0, "in_features must be a multiple of 4 for 2-bit packing");
-    let bytes_per_w_row = in_features / 4;
-    debug_assert_eq!(w_packed.len(), out_features * bytes_per_w_row);
+    debug_assert_eq!(w_unpacked.len(), out_features * in_features);
 
     // Scratch buffers reused across output features within a row. Per-row
     // allocations are the v1 trade-off; revisit if per-query latency is tight.
@@ -84,26 +88,16 @@ pub fn bitlinear_forward(
             x_quant[i] = q as i8;
         }
 
-        // 4) Matmul (int8 × ternary → int32) + optional bias (fp32) + rescale.
+        // 4) Matmul (i8 × i8 → i32) + optional bias (fp32) + rescale.
         //    Bias is added in pre-rescale space, matching F.linear semantics in the
         //    Python reference: y = (matmul + bias) / (w_scale * x_scale).
         let rescale = 1.0 / (w_scale * x_scale);
 
         for j in 0..out_features {
-            let w_row = &w_packed[j * bytes_per_w_row..(j + 1) * bytes_per_w_row];
+            let w_row = &w_unpacked[j * in_features..(j + 1) * in_features];
             let mut acc: i32 = 0;
-            for (byte_idx, &byte) in w_row.iter().enumerate() {
-                // 4 codes per byte, little-endian: element 4k in bits [1:0], 4k+1 in [3:2], etc.
-                let base = byte_idx * 4;
-                for sub in 0..4 {
-                    let code = (byte >> (sub * 2)) & 0b11;
-                    let xv = x_quant[base + sub] as i32;
-                    match code {
-                        0b01 => acc += xv,   // +1
-                        0b10 => acc -= xv,   // -1
-                        _    => {},          // 0 or reserved/pad
-                    }
-                }
+            for i in 0..in_features {
+                acc += (x_quant[i] as i32) * (w_row[i] as i32);
             }
             let mut y = acc as f32;
             if let Some(b) = bias {

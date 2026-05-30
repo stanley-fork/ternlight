@@ -42,6 +42,17 @@ compile_error!(
      multiple were enabled. Pick one of: emb_fp32 | emb_int8 | emb_ternary | emb_int4."
 );
 
+// WASM SIMD is required on the wasm32 build target — the BitLinear matmul
+// uses explicit `simd128` intrinsics (Phase B2). The flag is set in
+// engine/.cargo/config.toml; this check catches the case where the config
+// is missing or overridden.
+#[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
+compile_error!(
+    "tern-engine requires WASM SIMD (`+simd128`). \
+     Ensure engine/.cargo/config.toml sets `target-feature=+simd128`, \
+     or pass it via RUSTFLAGS. See docs/tern-runtime-perf.md → Phase B."
+);
+
 // ── Modules ─────────────────────────────────────────────────────────────────
 
 pub mod format;

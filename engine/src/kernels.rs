@@ -95,10 +95,7 @@ pub fn bitlinear_forward(
 
         for j in 0..out_features {
             let w_row = &w_unpacked[j * in_features..(j + 1) * in_features];
-            let mut acc: i32 = 0;
-            for i in 0..in_features {
-                acc += (x_quant[i] as i32) * (w_row[i] as i32);
-            }
+            let acc = bitlinear_inner_simd(&x_quant, w_row, in_features);
             let mut y = acc as f32;
             if let Some(b) = bias {
                 y += b[j];
@@ -106,6 +103,76 @@ pub fn bitlinear_forward(
             out_row[j] = y * rescale;
         }
     }
+}
+
+// ── SIMD inner dot product (Phase B2) ───────────────────────────────────────
+//
+// `i8 × i8 → i32` dot over `in_features` using WASM 128-bit SIMD. Replaces the
+// scalar inner loop with 16 lanes of i8 multiply-accumulate per iteration:
+//
+//   v128_load                       — load 16 i8 lanes of x_quant and of w_row
+//   i16x8_extmul_low_i8x16          — widening multiply, low 8 lanes  → i16x8
+//   i16x8_extmul_high_i8x16         — widening multiply, high 8 lanes → i16x8
+//   i32x4_extadd_pairwise_i16x8     — pairwise sum i16x8 → i32x4
+//   i32x4_add                       — accumulate
+//
+// Accumulator overflow: max activation magnitude is 128 (post-quant clamp);
+// max in_features in this model is 1024. Worst case |acc| ≤ 128 × 1024 = 131072,
+// well inside i32 range and 24-bit fp32 mantissa range, so `acc as f32` is exact.
+//
+// Required size: `in_features % 16 == 0`. Our model has d_model=256, ffn_dim=1024
+// — both multiples of 16. The scalar tail loop handles any leftover and is dead
+// code at current config but kept for safety against future dim changes.
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn bitlinear_inner_simd(x_quant: &[i8], w_row: &[i8], in_features: usize) -> i32 {
+    use core::arch::wasm32::*;
+
+    debug_assert!(x_quant.len() >= in_features);
+    debug_assert!(w_row.len()   >= in_features);
+
+    let mut acc = i32x4_splat(0);
+    let mut i = 0usize;
+
+    while i + 16 <= in_features {
+        // SAFETY: bounds checked above; v128_load reads 16 bytes from an i8
+        // pointer with no alignment requirement on WASM.
+        let x_vec: v128 = unsafe { v128_load(x_quant.as_ptr().add(i) as *const v128) };
+        let w_vec: v128 = unsafe { v128_load(w_row.as_ptr().add(i)   as *const v128) };
+
+        let lo = i16x8_extmul_low_i8x16(x_vec, w_vec);
+        let hi = i16x8_extmul_high_i8x16(x_vec, w_vec);
+        acc = i32x4_add(acc, i32x4_extadd_pairwise_i16x8(lo));
+        acc = i32x4_add(acc, i32x4_extadd_pairwise_i16x8(hi));
+        i += 16;
+    }
+
+    // Horizontal sum: i32x4 → scalar
+    let mut buf = [0i32; 4];
+    // SAFETY: buf is 4 × 4 = 16 bytes, matching v128 width.
+    unsafe { v128_store(buf.as_mut_ptr() as *mut v128, acc) };
+    let mut total = buf[0] + buf[1] + buf[2] + buf[3];
+
+    // Scalar tail (dead code at current model dims; guards against future shape changes)
+    while i < in_features {
+        total += (x_quant[i] as i32) * (w_row[i] as i32);
+        i += 1;
+    }
+    total
+}
+
+// Native fallback so the rlib build (used by future tests) still compiles.
+// Never on the ship path — wasm-pack always emits wasm32, where the SIMD
+// path above is taken.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn bitlinear_inner_simd(x_quant: &[i8], w_row: &[i8], in_features: usize) -> i32 {
+    let mut acc: i32 = 0;
+    for i in 0..in_features {
+        acc += (x_quant[i] as i32) * (w_row[i] as i32);
+    }
+    acc
 }
 
 /// Parameterless LayerNorm: `(x - mean) / sqrt(var + eps)`, biased variance.

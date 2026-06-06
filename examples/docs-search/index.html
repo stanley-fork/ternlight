@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="On-device sentence embeddings — engine, weights, and tokenizer in 7 MB of WASM. Search the React docs entirely on your CPU." />
+  <title>ternlight · semantic search · React docs</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <main class="app">
+
+    <!-- ───────────────────────────────────────────────────────────────────
+         Header — visible in both phases. Project hero + 3 spec cards +
+         "this is just one example" framing for the search below.
+         ─────────────────────────────────────────────────────────────────── -->
+    <header class="page-header">
+
+      <h1 class="hero-title">
+        <span class="brand">Ternlight</span> — An embedding model in 7 MB.
+        Runs on your CPU. No API.
+      </h1>
+
+      <div class="hero-cards">
+
+        <article class="hero-card">
+          <p class="hero-card-line">Runs in your browser</p>
+          <p class="hero-card-sub">no API call</p>
+        </article>
+
+        <article class="hero-card">
+          <p class="hero-card-line">Engine + weights · <span class="hero-card-em">7 MB</span></p>
+          <p class="hero-card-sub">CPU only · no GPU</p>
+        </article>
+
+        <article class="hero-card">
+          <p class="hero-card-line">Fast embeddings · <span class="hero-card-em">~2 ms</span></p>
+          <p class="hero-card-sub">per query</p>
+        </article>
+
+      </div>
+
+      <div class="example-section">
+        <p class="example-kicker">EXAMPLE</p>
+        <h2 class="example-headline">React docs search</h2>
+        <p class="example-text">
+          1,987 paragraphs from React's <em>Learn</em> section, embedded in your
+          browser. Type a question to query them.
+        </p>
+      </div>
+
+    </header>
+
+    <!-- ───────────────────────────────────────────────────────────────────
+         Phase 1 — indexing. Shown until the corpus is fully embedded.
+         ─────────────────────────────────────────────────────────────────── -->
+    <section id="indexing-phase" class="indexing-phase">
+      <p class="indexing-status">
+        <span id="indexing-action">Loading the engine…</span>
+      </p>
+
+      <div class="progress">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+
+      <div class="indexing-stats">
+        <div class="stat">
+          <div class="stat-value" id="stat-count">0 / 0</div>
+          <div class="stat-label">CHUNKS</div>
+        </div>
+        <div class="stat stat-throughput">
+          <div class="stat-value" id="stat-tput">— <span class="stat-unit">emb/sec</span></div>
+          <div class="stat-label">ON YOUR CPU</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-elapsed">0.0 <span class="stat-unit">s</span></div>
+          <div class="stat-label">ELAPSED</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────────────────────────────────────────────────────────────
+         Phase 2 — search. Two-column grid: results on left, info pane right.
+         ─────────────────────────────────────────────────────────────────── -->
+    <div id="search-phase" class="search-phase hidden">
+
+      <section class="content">
+
+        <div class="search-row">
+          <span class="search-prefix">›</span>
+          <input
+            id="query"
+            class="query-input"
+            type="text"
+            placeholder="how do I run something when state changes"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <span id="latency-badge" class="badge">—</span>
+        </div>
+
+        <div class="try-queries">
+          <span class="try-label">ASK</span>
+          <button class="try-q" data-q="share state across components">share state across components</button>
+          <button class="try-q" data-q="skip a re-render">skip a re-render</button>
+          <button class="try-q" data-q="run code after render">run code after render</button>
+          <button class="try-q" data-q="avoid prop drilling">avoid prop drilling</button>
+          <button class="try-q" data-q="form input value">form input value</button>
+        </div>
+
+        <div id="results" class="results"></div>
+
+      </section>
+
+      <aside class="info-pane">
+
+        <div class="info-block">
+          <p class="info-block-label">EMBED LATENCY</p>
+          <div class="info-block-value">
+            <span id="latency-big">—</span><span class="info-unit">ms</span>
+          </div>
+          <p class="info-block-sub">single <code>embed()</code> call · <span id="info-output-dim">384</span>-dim vector output</p>
+          <button id="copy-vector" class="copy-btn" disabled type="button">
+            <span class="copy-btn-icon">⧉</span>
+            <span class="copy-btn-label">Copy query embedding</span>
+          </button>
+        </div>
+
+        <div class="info-block">
+          <p class="info-block-label">MODEL</p>
+          <dl class="info-list">
+            <dt>Embedding</dt>         <dd id="info-emb">—</dd>
+            <dt>Linear weights</dt>    <dd>ternary <span class="muted">(BitLinear)</span></dd>
+            <dt>Transformer layers</dt><dd id="info-layers">—</dd>
+            <dt>Attention heads</dt>   <dd id="info-heads">—</dd>
+            <dt>d_model</dt>           <dd id="info-dmodel">—</dd>
+            <dt>FFN dim</dt>           <dd id="info-ffn">—</dd>
+            <dt>Output</dt>            <dd id="info-output">—</dd>
+            <dt>Vocab</dt>             <dd id="info-vocab">—</dd>
+            <dt>Max input</dt>         <dd id="info-maxseq">—</dd>
+          </dl>
+        </div>
+
+        <div class="info-block">
+          <p class="info-block-label">INDEX</p>
+          <dl class="info-list">
+            <dt>Chunks</dt>     <dd id="info-chunks">—</dd>
+            <dt>Build time</dt> <dd id="info-buildtime">—</dd>
+            <dt>Throughput</dt> <dd id="info-tput">—</dd>
+            <dt>Source</dt>     <dd>react.dev <span class="muted">· Learn</span></dd>
+          </dl>
+        </div>
+
+        <div class="info-block">
+          <p class="info-block-label">PACKAGE</p>
+          <dl class="info-list">
+            <dt>Bundle</dt>      <dd id="info-bundle">—</dd>
+            <dt>Engine init</dt> <dd id="info-init">—</dd>
+            <dt>vs teacher</dt>  <dd>12× smaller</dd>
+            <dt>After load</dt>  <dd>cached, offline</dd>
+          </dl>
+        </div>
+
+      </aside>
+
+    </div>
+
+  </main>
+
+  <footer class="footer">
+    React docs from
+    <a href="https://github.com/reactjs/react.dev" target="_blank" rel="noopener noreferrer">reactjs/react.dev</a>
+    · CC BY 4.0 · Demo built with
+    <a href="https://github.com/soycaporal/ternlight" target="_blank" rel="noopener noreferrer">ternlight</a>
+  </footer>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

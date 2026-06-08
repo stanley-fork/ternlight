@@ -29,21 +29,16 @@ const $latencyBadge = $('latency-badge');
 
 // Info pane
 const $latencyBig      = $('latency-big');
-const $infoOutputDim   = $('info-output-dim');
 const $copyBtn         = $('copy-vector');
 const $infoEmb         = $('info-emb');
 const $infoLayers      = $('info-layers');
 const $infoHeads       = $('info-heads');
 const $infoDmodel      = $('info-dmodel');
-const $infoFfn         = $('info-ffn');
 const $infoOutput      = $('info-output');
-const $infoVocab       = $('info-vocab');
 const $infoMaxseq      = $('info-maxseq');
-const $infoChunks      = $('info-chunks');
-const $infoBuildTime   = $('info-buildtime');
-const $infoTput        = $('info-tput');
 const $infoBundle      = $('info-bundle');
 const $infoInit        = $('info-init');
+const $infoTput        = $('info-tput');
 
 // (Network-tracking shim removed — the PACKAGE block now states "cached
 // after load" categorically. Live counters would invite questions about
@@ -93,6 +88,8 @@ let LAST_QUERY_VEC = null; // most recent query embedding (for copy-button)
     WASM_INIT_MS = Math.round(performance.now() - wasmStart);
 
     CONFIG = parseConfigSummary(config_summary());
+
+    // (info-output-dim was removed from the HTML; nothing to update here now)
 
     $indexAction.textContent = 'Fetching corpus…';
     const corpusResp = await fetch('./chunks.json');
@@ -163,20 +160,12 @@ function finishIndexing() {
     const N = CORPUS.length;
 
     // Populate info pane
-    $infoOutputDim.textContent = CONFIG.output_dim;
-
-    $infoEmb.innerHTML    = `${CONFIG.embedding_format} <span class="muted">(per-row PTQ)</span>`;
+    $infoEmb.innerHTML      = `${CONFIG.embedding_format} <span class="muted">(per-row PTQ)</span>`;
     $infoLayers.textContent = CONFIG.n_layers;
     $infoHeads.textContent  = CONFIG.n_heads;
     $infoDmodel.textContent = CONFIG.d_model;
-    $infoFfn.textContent    = CONFIG.ffn_dim.toLocaleString();
     $infoOutput.textContent = `${CONFIG.output_dim} dims`;
-    $infoVocab.textContent  = CONFIG.vocab.toLocaleString();
     $infoMaxseq.textContent = `${CONFIG.max_seq_len} tokens`;
-
-    $infoChunks.textContent    = N.toLocaleString();
-    $infoBuildTime.textContent = `${BUILD_TIME_SEC.toFixed(1)} s`;
-    $infoTput.textContent      = `${FINAL_TPUT.toLocaleString()} emb/sec`;
 
     // PACKAGE block
     if (WASM_BYTES > 0) {
@@ -186,6 +175,7 @@ function finishIndexing() {
         $infoBundle.textContent = '— MB';
     }
     $infoInit.textContent = `${WASM_INIT_MS} ms`;
+    $infoTput.textContent = `~${FINAL_TPUT.toLocaleString()} emb/sec`;
 
     // Swap the indexing phase for the search phase
     $indexingPhase.classList.add('hidden');

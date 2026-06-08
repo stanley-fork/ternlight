@@ -17,10 +17,12 @@
          ─────────────────────────────────────────────────────────────────── -->
     <header class="page-header">
 
-      <h1 class="hero-title">
-        <span class="brand">Ternlight</span> — An embedding model in 7 MB.
-        Runs on your CPU. No API.
-      </h1>
+      <h1 class="hero-title">Ternlight</h1>
+      <div class="hero-tagline">
+        <p>An embedding model in <span class="accent">7 MB</span>.</p>
+        <p>Runs on your <span class="accent">CPU</span>. <span class="accent">No API</span>.</p>
+      </div>
+      <p class="hero-pitch">Drop it in, embed text in milliseconds, and never call a server.</p>
 
       <div class="hero-cards">
 
@@ -45,8 +47,7 @@
         <p class="example-kicker">EXAMPLE</p>
         <h2 class="example-headline">React docs search</h2>
         <p class="example-text">
-          1,987 paragraphs from React's <em>Learn</em> section, embedded in your
-          browser. Type a question to query them.
+          Search React's docs, embedded in your browser. Type a question to query them.
         </p>
       </div>
 
@@ -120,7 +121,7 @@
           <div class="info-block-value">
             <span id="latency-big">—</span><span class="info-unit">ms</span>
           </div>
-          <p class="info-block-sub">single <code>embed()</code> call · <span id="info-output-dim">384</span>-dim vector output</p>
+          <p class="info-block-sub">single <code>embed()</code> call</p>
           <button id="copy-vector" class="copy-btn" disabled type="button">
             <span class="copy-btn-icon">⧉</span>
             <span class="copy-btn-label">Copy query embedding</span>
@@ -135,30 +136,19 @@
             <dt>Transformer layers</dt><dd id="info-layers">—</dd>
             <dt>Attention heads</dt>   <dd id="info-heads">—</dd>
             <dt>d_model</dt>           <dd id="info-dmodel">—</dd>
-            <dt>FFN dim</dt>           <dd id="info-ffn">—</dd>
             <dt>Output</dt>            <dd id="info-output">—</dd>
-            <dt>Vocab</dt>             <dd id="info-vocab">—</dd>
             <dt>Max input</dt>         <dd id="info-maxseq">—</dd>
-          </dl>
-        </div>
-
-        <div class="info-block">
-          <p class="info-block-label">INDEX</p>
-          <dl class="info-list">
-            <dt>Chunks</dt>     <dd id="info-chunks">—</dd>
-            <dt>Build time</dt> <dd id="info-buildtime">—</dd>
-            <dt>Throughput</dt> <dd id="info-tput">—</dd>
-            <dt>Source</dt>     <dd>react.dev <span class="muted">· Learn</span></dd>
           </dl>
         </div>
 
         <div class="info-block">
           <p class="info-block-label">PACKAGE</p>
           <dl class="info-list">
-            <dt>Bundle</dt>      <dd id="info-bundle">—</dd>
-            <dt>Engine init</dt> <dd id="info-init">—</dd>
-            <dt>vs teacher</dt>  <dd>12× smaller</dd>
-            <dt>After load</dt>  <dd>cached, offline</dd>
+            <dt>Bundle</dt>         <dd id="info-bundle">—</dd>
+            <dt>Engine init</dt>    <dd id="info-init">—</dd>
+            <dt>Throughput</dt>     <dd id="info-tput">—</dd>
+            <dt>License</dt>        <dd>MIT</dd>
+            <dt>After first load</dt><dd>cached <span class="muted">(0 network)</span></dd>
           </dl>
         </div>
 

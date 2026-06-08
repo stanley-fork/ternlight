@@ -50,6 +50,10 @@ eval/regression/test_data/*.json
 .env
 .env.local
 
+# ── Deploy tooling ──────────────────────────────────────────────────────────
+.vercel/            # Vercel CLI's local project link — contains your account/project IDs
+
 # ── Claude Code (local overrides) ───────────────────────────────────────────
 .claude/settings.local.json
 .claude/settings.json
+.docs/

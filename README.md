@@ -1,5 +1,9 @@
 # tern
 
+[![CI](https://github.com/soycaporal/ternlight/actions/workflows/ci.yml/badge.svg)](https://github.com/soycaporal/ternlight/actions/workflows/ci.yml)
+[![Build Engine](https://github.com/soycaporal/ternlight/actions/workflows/build-engine.yml/badge.svg)](https://github.com/soycaporal/ternlight/actions/workflows/build-engine.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > **On-device semantic embeddings for JavaScript.** A ~3 MB engine + model that gives you vector search, similarity matching, and intent routing locally — no API keys, no backend, no GPU.
 
 `tern` is the SQLite of semantic matching: zero-config, entirely self-contained, and built to embed inside your app rather than sit behind a service.

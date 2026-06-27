@@ -353,7 +353,7 @@ ternlight is evaluated at three levels of rigor, in increasing order:
 2. **Per-checkpoint formal eval** — A full evaluation harness against held-out benchmarks: pairwise rank correlation vs the teacher (`test/spearman`), STS-Benchmark (`stsb/{spearman,pearson}`), retrieval (`retrieval/ndcg@10` on SciFact). Run per checkpoint to pick the right one to ship.
 3. **Quantization gap** — The above metrics computed against a same-architecture **fp32 baseline** trained on the same data, isolating how much quality was lost specifically to ternarization vs. inherent to the small architecture. The honest answer to "what did the compression cost us?"
 
-### The quantization gap, visualized
+### The quantization gap
 
 QAT (shipped, ternary) vs. a same-architecture **fp32 baseline** trained on the same data, on the held-out test set:
 
@@ -364,14 +364,6 @@ QAT (shipped, ternary) vs. a same-architecture **fp32 baseline** trained on the 
 | `recall@5` (SciFact retrieval) | 0.492 | **0.518** | **+0.026** ★ |
 
 The teacher-fidelity gap is small (~3.5 Spearman points). On the actual downstream retrieval task — the metric that matters in production — the QAT model edges out its fp32 ruler. Within noise, but a strong signal that the ternary constraint isn't costing us anything on real use cases. STS-Benchmark and additional benchmarks still pending.
-
----
-
-## 5. Packaging and distribution
-
-*Work in progress.* Today the engine builds to `engine/pkg/` and is consumed locally for testing; the proper npm package is the next phase.
-
-*Packaging plan (multi-target builds, exports routing, async-init wrapper, known runtime gotchas): see [docs/tern-bundling.md](tern-bundling.md).*
 
 
 

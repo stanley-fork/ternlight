@@ -1,13 +1,14 @@
-# @tern — Technical Architecture Document
+# Architecture
 
-> For product context, use cases, and tier definitions, see [tern-scoping.md](tern-scoping.md).
-> For model sizing rationale and parameter breakdowns, see [tern-model-sizing.md](tern-model-sizing.md).
+> System design — components, data flow, model format, and runtime behavior.
+> For end-to-end framing of the project, see [overview.md](overview.md).
+> For training-time math (forward pass, backprop, distillation dynamics), see [model-internals.md](model-internals.md).
 
 ---
 
 ## 1. System Overview
 
-The @tern runtime is composed of three tightly coupled components:
+The ternlight runtime is composed of three tightly coupled components:
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -38,35 +39,49 @@ The @tern runtime is composed of three tightly coupled components:
 
 ## 2. Core Architecture Pillars
 
-### Pillar 1: Ternary Transformer (Micro-Architecture)
+Three technical choices stack to fit a capable embedding model into a 7 MB WASM bundle that runs on CPU.
 
-The student model is a 2-layer transformer encoder where all Linear layers are replaced with **BitLinear layers**. These layers constrain all learned weights to three states: `{-1, 0, +1}`.
+### Pillar 1: Quantization-aware training (QAT) with ternary weights
+
+All Linear layers in the student are **BitLinear layers** — weights are constrained to three values: `{-1, 0, +1}` plus a single fp32 scale per matrix. The model is trained with that constraint from the start using the [BitNet b1.58][bitnet-paper] straight-through estimator, so quality holds up where naive post-training quantization would collapse.
 
 At inference time this means:
+
 - No floating-point matrix multiplication — only integer additions and subtractions
 - Weights pack at ~1.58 bits per parameter (log₂(3)); practical packing overhead brings this to ~2 bits
-- Four weights fit into a single byte using 2-bit encoding
+- Quality stays within ~95% of the full-precision baseline (see [`eval/quality/RESULTS.md`](../eval/quality/RESULTS.md))
 
-The model is an encoder only — it produces a single fixed-size embedding vector per input, not autoregressive token predictions.
+The model is an encoder — it produces a single fixed-size embedding vector per input, not autoregressive token predictions.
 
-### Pillar 2: Hardcoded Wasm Engine
+### Pillar 2: Bit-packing — model + tokenizer in one WASM bundle
 
-The engine is not a generic inference framework. It is a **hardcoded computation graph** compiled from Rust to WebAssembly. It:
+Weights serialize at ~2 bits per parameter (four weights per byte), with the embedding layer optionally further compressed via 4-bit per-row PTQ. The whole model fits into a binary file you can embed *inside* the `.wasm` itself:
 
-- Includes the HuggingFace `tokenizers` Rust crate as a Cargo dependency — tokenization happens inside Wasm, not in JS
-- Embeds the BERT WordPiece vocabulary at compile time via `include_bytes!()` — no separate vocab file ships
-- Allocates a single contiguous block of linear memory at startup
-- Maps the model `.bin` file sequentially into that memory (no deserialization)
-- Executes each layer in order using branchless bitwise operations
-- Uses SIMD where available for vectorized additions over bit-packed rows
-
-No floating-point matrix multiplication is performed at inference time. The engine has no plugin system, no dynamic dispatch, and no model-agnostic abstraction — it is structurally coupled to the specific layer shapes defined in the header.
+- The model `.bin` embeds at compile time via Rust's `include_bytes!()` macro
+- The HuggingFace `tokenizers` crate compiles into the same `.wasm` — tokenization happens inside Wasm, not in JS
+- The BERT WordPiece vocabulary embeds at compile time via the same mechanism — no separate vocab file ships
+- No postinstall, no runtime fetch — `npm install` and you're done
 
 ```toml
 # Cargo.toml
 [dependencies]
 tokenizers = "0.19"
 ```
+
+The resulting `.wasm` is ~7 MB total: 4.6 MB packed model + 695 KB tokenizer + ~1.7 MB engine code.
+
+**License:** the HuggingFace `tokenizers` crate is Apache 2.0.
+
+### Pillar 3: SIMD inference engine in Rust → WASM
+
+The engine is not a generic inference framework. It is a **hardcoded computation graph** compiled from Rust to WebAssembly with `+simd128`. It:
+
+- Allocates a single contiguous block of linear memory at startup
+- Maps the model `.bin` sequentially into that memory (no deserialization)
+- Executes each layer in order using branchless bitwise operations
+- Uses 128-bit WASM SIMD lanes for vectorized add/subtract over bit-packed rows
+
+The ternary matmul reduces to sign-conditioned add/subtract that maps directly onto CPU vector instructions — fast by construction, not by tuning. No plugin system, no dynamic dispatch, no model-agnostic abstraction; the engine is structurally coupled to the specific layer shapes defined in the `.bin` header.
 
 ```rust
 #[wasm_bindgen]
@@ -77,14 +92,7 @@ pub fn embed(text: &str) -> Vec<f32> {
 }
 ```
 
-**License:** The HuggingFace `tokenizers` crate is Apache 2.0.
-
-### Pillar 3: Thin JS Bridge
-
-The Node.js wrapper is intentionally minimal — tokenization no longer lives here:
-- **API surface:** `embed(text)`, `similarity(a, b)`, and `classify(text, labels[])` pass raw strings directly into Wasm and receive float32 vectors back
-- **No tokenization logic in JS** — the Wasm engine handles the full pipeline from raw string to embedding vector
-- **Memory handoff:** Output embedding vector is read back from Wasm linear memory as a `Float32Array`
+[bitnet-paper]: https://arxiv.org/abs/2402.17764
 
 ---
 
@@ -131,14 +139,14 @@ The training pipeline is strictly separated from the runtime. PyTorch and GPU in
 3. **Pack:** Every four ternary values are packed into one byte using 2-bit encoding (`00` = 0, `01` = +1, `10` = -1, `11` = unused/padding).
 4. **Write:** The 24-byte header is prepended and the file is written as a raw `.bin`.
 
-### Phase C: Inference (Node.js / Wasm)
+### Phase C: Inference (Wasm)
 
-1. `fs.readFileSync` loads the `.bin` into a Node.js Buffer.
-2. The Buffer is written into Wasm linear memory at offset 0.
-3. The JS wrapper passes the raw input string to the Wasm `embed()` function.
-4. Inside Wasm, the embedded `tokenizers` crate tokenizes the string using BERT WordPiece (vocab compiled in at build time).
-5. The Wasm engine performs the forward pass (embedding lookup → 2× attention + FFN → mean pooling) and writes the output embedding vector to a known memory offset.
-6. The JS wrapper reads the output vector back as a `Float32Array` and returns it to the caller.
+`embed(text: &str) -> Vec<f32>` is the entry point. Inside the engine:
+
+1. **Tokenize** — BERT WordPiece via the compiled-in `tokenizers` crate (vocab embedded at build time). Returns token IDs, truncated to `max_seq_len = 128`.
+2. **Embedding lookup** — each token ID indexes the (int4-quantized) embedding table; per-row scales restore the fp32 activation magnitude.
+3. **Forward pass** — 2 transformer layers (attention + FFN, ternary weights throughout).
+4. **Mean-pool and L2-normalize** → 384-dim unit vector.
 
 ---
 
@@ -184,34 +192,25 @@ The `tokenizers` crate adds to the compiled Wasm size. Estimated breakdown:
 
 ## 6. Runtime Performance Model
 
-A single `embed()` call processes one string through the full forward pass on CPU. This section breaks down where the cycles go and what to be mindful of when building the Wasm engine.
+A single `embed()` call runs **~218M operations** per input string. The compute splits cleanly between ternary weight matmuls and a small float-multiply tail.
 
-### Operation budget per embed() call
+**Ternary add/subtract — ~201M ops (~92%).** Every learned matrix is bit-packed weights, so every weight matmul reduces to add/sub:
 
-**Ternary matmul — add/subtract only, no float multiply:**
+| Stage | Per 2 layers |
+|---|---:|
+| Q/K/V/O projections | ~33.6M |
+| FFN (up + down, 256 ↔ 1024) | ~134.4M |
+| Embedding scale + readout | ~33.6M |
+| **Total** | **~201.6M** |
 
-| Operation | Dimensions | Ops per layer | Notes |
-|---|---|---|---|
-| Q, K, V projections | 128 × 256 × 256 × 3 | ~25.2M | Pure add/sub |
-| Output projection | 128 × 256 × 256 | ~8.4M | Pure add/sub |
-| FFN up (256→1024) | 128 × 1024 × 256 | ~33.6M | Pure add/sub |
-| FFN down (1024→256) | 128 × 256 × 1024 | ~33.6M | Pure add/sub |
-| **Per layer** | | **~100.8M** | |
-| **Two layers** | | **~201.6M** | |
+**Float multiply — ~17M ops (~8%).** Bounded to operations over *activations* (which can't be ternarized) plus per-token non-linearities:
 
-**Float multiply (unavoidable — not covered by ternary):**
+| Stage | Ops | Why float |
+|---|---:|---|
+| Attention scores (Q @ K.T, attn × V) | ~16.8M | Both operands are float activations |
+| Softmax, scaling, LayerNorm × 5, GELU × 2 | ~780K | Transcendentals + per-token statistics |
 
-| Operation | Ops | Why it can't be ternary |
-|---|---|---|
-| Attention scores (Q @ K.T) | ~8.4M | Q, K are float activations, not weights |
-| Attention × V | ~8.4M | Same — activation × activation |
-| Score scaling (÷ sqrt(d_head)) | ~130K | Single divide per score |
-| Softmax (exp, div) | ~130K | Transcendental functions |
-| LayerNorm (mean, var, div) × 5 | ~260K | Statistical normalization |
-| GELU activation × 2 | ~260K | Non-linear activation |
-| **Total float multiply** | **~17M** | ~8% of total ops |
-
-**Summary: ~218M total ops per call.** ~92% are ternary add/subtract, ~8% are float multiply (mostly in attention score computation).
+**The 92/8 ratio is the key result.** The dominant share is integer add/sub, which maps directly to SIMD lanes. The remaining 8% is geographically isolated to attention-score computation — small enough that further quantization offers diminishing returns.
 
 ### Why ternary add/sub is fast on CPU
 
@@ -246,22 +245,6 @@ For comparison, `all-MiniLM-L6-v2` at float32 is ~88MB — it constantly evicts 
 - Subsequent calls ~3–8ms (everything in L2, no RAM access)
 - The bottleneck shifts from memory bandwidth to raw ALU throughput
 
-### What to be mindful of when building the Wasm engine
-
-**Memory layout matters.** Weights should be stored contiguously in the order they're accessed during the forward pass. If the engine reads W_q, then jumps to norm1, then back to W_k, it defeats sequential cache prefetch. The .bin format already stores weights in forward-pass order for this reason.
-
-**Unpack close to use.** Two strategies for reading 2-bit packed weights:
-
-1. **Unpack entire matrix to float32, then matmul.** Simpler code but doubles memory: a 256×256 ternary matrix is 16KB packed, 256KB unpacked. At 12 matrices that's 3MB of temporary float32 — blows L1 and pressures L2.
-
-2. **Unpack per-row during matmul.** Read one packed row (64 bytes for 256 weights), unpack to a float32 row buffer (1KB), compute the dot product, reuse the buffer. Only 1KB of temporary memory. Cache-friendly.
-
-Strategy 2 is strongly preferred. The unpacking cost (~256 shift+mask ops per row) is negligible compared to the matmul ops. This keeps the hot loop in L1.
-
-**Attention score computation is the float-heavy part.** Q @ K.T and attn @ V are full float32 matmuls over activation tensors (not weights). These are 128×64 × 64×128 per head — small matrices that fit in L1. Not a bottleneck, but this is where SIMD (future work) would help most.
-
-**GELU is expensive per-op but rare.** Only called twice (once per FFN). Can be approximated with the fast tanh version: `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x³)))` — avoids the `erf()` call.
-
 ### Estimated latency targets
 
 | Environment | Estimated latency | Notes |
@@ -273,18 +256,6 @@ Strategy 2 is strongly preferred. The unpacking cost (~256 shift+mask ops per ro
 | Browser (Chrome/Firefox) | ~5–15ms | Comparable to Node.js |
 
 These are estimates based on op count and typical Wasm overhead factors. Real numbers will come from Phase 2 benchmarks. The scoping doc targets 1–5ms — achievable with SIMD, likely 5–15ms without.
-
----
-
-## 7. Similarity Scoring
-
-The API exposes two scoring mechanisms depending on use case:
-
-**Cosine similarity (default for `similarity()` and `classify()`)**
-Computed in JS from the float32 output vectors. Standard dot product normalized by magnitudes. Returns a value in `[-1, 1]`; for semantic tasks typically `[0, 1]`.
-
-**Hamming distance (optional, for `@tern/search` batch operations)**
-The float32 embedding is binarized (sign function) and compared using bitwise XOR. O(n) over the number of bits. Useful for large-scale nearest-neighbor search where cosine similarity over full float vectors would be too slow.
 
 ---
 

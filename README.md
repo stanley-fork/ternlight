@@ -117,6 +117,16 @@ There's still tons of headroom for perf and quality improvements. Beyond stacked
 
 See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
+## Acknowledgments
+
+ternlight builds on three open-source efforts:
+
+- **[BitNet b1.58](https://arxiv.org/abs/2402.17764)** (Ma et al., Microsoft Research, 2024) — the architectural research underlying ternary weight training.
+- **[`bitlinear`](https://github.com/schneiderkamplab/bitlinear)** by [@schneiderkamplab](https://github.com/schneiderkamplab) — the reference PyTorch implementation of BitLinear. We use it directly during training (`bitlinear==2.4.6`) and the Rust inference engine mirrors its forward-pass math byte-for-byte.
+- **[`sentence-transformers/all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)** — the teacher model the student is distilled from.
+
+The Rust engine in [`engine/src/kernels.rs`](engine/src/kernels.rs) is an independent reimplementation of `bitlinear`'s `BitLinear.forward()` for the WASM target; parity tests guard against drift.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -124,3 +134,7 @@ MIT — see [LICENSE](LICENSE).
 ---
 
 <sub>Banner photo via <a href="https://macaulaylibrary.org/asset/637450290">Macaulay Library</a>, Cornell Lab of Ornithology.</sub>
+
+---
+
+<p align="center"><em>In loving memory of Alex Movsessian - whose mind for software was matched only by the kindness he showed others.</em></p>

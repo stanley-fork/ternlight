@@ -16,15 +16,15 @@ notes specific to one component, see the README in that directory.
 
 ## Reading paths
 
-**New visitor curious about the project**
-Start with [overview.md](overview.md). End-to-end framing in a single read.
+- **New visitor curious about the project**
+  - [overview.md](overview.md) — end-to-end framing in a single read
 
-**Contributor touching the inference engine**
-Read [architecture.md](architecture.md) → [inference-engine.md](inference-engine.md).
-Use [model-internals.md](model-internals.md) as the canonical reference when
-making sure runtime behavior matches training-time behavior.
+- **Contributor touching the inference engine**
+  - [architecture.md](architecture.md) — system design and packaging
+  - [inference-engine.md](inference-engine.md) — runtime internals
+  - [model-internals.md](model-internals.md) — canonical math reference for runtime/training parity
 
-**Researcher reproducing results**
-Start at [eval-methodology.md](eval-methodology.md) for the scorecard, then
-[`eval/quality/RESULTS.md`](../eval/quality/RESULTS.md) for the numbers.
-[model-internals.md](model-internals.md) covers training-side math.
+- **Researcher reproducing results**
+  - [eval-methodology.md](eval-methodology.md) — scorecard methodology
+  - [`eval/quality/RESULTS.md`](../eval/quality/RESULTS.md) — the published numbers
+  - [model-internals.md](model-internals.md) — training-side math

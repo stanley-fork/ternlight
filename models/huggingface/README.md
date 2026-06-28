@@ -213,6 +213,7 @@ If you use ternlight in published work, please cite:
 ternlight builds on:
 
 - [BitNet b1.58][bitnet-paper] (Ma et al., 2024) — ternary weight training
+- [`bitlinear`][bitlinear-repo] by [@schneiderkamplab][bitlinear-author] — the reference PyTorch implementation of BitLinear, used directly during training (`bitlinear==2.4.6`); the Rust inference engine mirrors its forward-pass math byte-for-byte
 - [`sentence-transformers/all-MiniLM-L6-v2`][teacher] — teacher model
 
 ## Links
@@ -223,6 +224,8 @@ ternlight builds on:
 
 [teacher]: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
 [bitnet-paper]: https://arxiv.org/abs/2402.17764
+[bitlinear-repo]: https://github.com/schneiderkamplab/bitlinear
+[bitlinear-author]: https://github.com/schneiderkamplab
 [github]: https://github.com/soycaporal/ternlight
 [engine-source]: https://github.com/soycaporal/ternlight/tree/main/engine
 [results-md]: https://github.com/soycaporal/ternlight/blob/main/eval/quality/RESULTS.md

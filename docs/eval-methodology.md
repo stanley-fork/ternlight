@@ -1,77 +1,55 @@
 # Eval Methodology
 
-> What each metric in the release scorecard measures, how to reproduce it, and why we chose it.
+How we measure ternlight before each release. Six dimensions, each answering a different question:
 
-This is the reference document for `eval/REPORT.md` and `eval/results/v<X.Y.Z>.json`. Every metric we publish should be traceable here.
+| Dimension | What it answers |
+|---|---|
+| **Model quality** | Does the model produce embeddings that match the teacher and human judgements? |
+| **Quantization gap** | How much quality did ternary quantization cost vs full fp32? |
+| **Performance** | How fast does it run, on what hardware? |
+| **Size** | What does the user actually download? |
+| **Compatibility** | Where does it run cleanly? |
+| **Honest comparison** | How does it stack up against existing alternatives? |
 
-## Status
+Each section below names the metrics for one dimension and explains what they measure.
 
-Pre-alpha — full methodology pending. The skeleton below mirrors the six dimensions of the release scorecard.
+## 1. Model quality
 
----
+### Teacher alignment
 
-## 1. Quality
-
-### Teacher alignment (mean per-query cosine similarity)
-
-**What it measures:** how closely the student's embeddings align with the teacher (`all-MiniLM-L6-v2`) for the same input. Average of `cosine_sim(student(q), teacher(q))` across N held-out queries.
-
-**Why this metric:** the most direct test of "did distillation work?" — directly compares student output to the target the loss was minimizing.
-
-**Methodology:**
-- Held-out queries: MS MARCO `train[25000:27000]` (2,000 queries — same slice as Phase 1's `eval.py`)
-- Teacher embeddings precomputed once (`prepare_eval_data.py`), cached
-- Student embeddings: run shipped engine on each query
-- Both vectors are L2-normalized (unit), so cosine sim is a dot product
-
-**Reproduce:**
-```bash
-node eval/regression/regression_test.js
-```
+Mean cosine similarity between student and teacher (`all-MiniLM-L6-v2`) embeddings on a 2,000-query held-out slice of MS MARCO. The most direct test of whether distillation transferred the teacher's structure.
 
 ### STS-B AUC
 
-**What it measures:** can the model distinguish "similar" from "not similar" sentence pairs as scored by humans? Wilcoxon-Mann-Whitney form: probability that a randomly picked similar pair scores higher than a randomly picked dissimilar pair.
-
-**Why this metric:** STS Benchmark is the de-facto standard for sentence embedding quality. AUC is robust to scale/offset and aligns with binary classification use cases (FAQ matching, intent routing).
-
-**Methodology:**
-- Dataset: `mteb/stsbenchmark-sts` test split (1,379 pairs)
-- For each pair, embed both sentences, compute cosine sim
-- Binarize human scores at threshold 4.0 (>=4 → "similar", <4 → "not similar")
-- AUC = (count of (similar, dissimilar) pairs where similar > dissimilar) / (total such pairs)
+On the STS Benchmark test split (1,379 sentence pairs), the probability that a human-rated "similar" pair scores higher than a "dissimilar" pair under the model's cosine similarity. Robust to scale and offset; aligns with binary-classification use cases like FAQ matching and intent routing.
 
 ### STS-B Spearman
 
-**What it measures:** rank correlation between model similarity scores and human similarity scores. Sensitive to the full distribution, not just a threshold.
-
-**Methodology:** same data as AUC. Spearman correlate model sims vs human scores.
+Rank correlation between model similarity scores and human scores on the same 1,379-pair STS-B split. Sensitive to the full distribution rather than a single threshold.
 
 ### Recall@K
 
-**What it measures:** for nearest-neighbor retrieval, fraction of queries where the correct match appears in the top-K results.
-
-**Methodology:**
-- Two corpora: 20 general queries + 20 tech queries (hardcoded — same as Phase 1 eval)
-- Each query has one correct match in the corresponding corpus
-- For each query, embed query + each corpus item, rank by cosine sim, check if correct match is in top-K
+Fraction of queries whose correct match appears in the top-K nearest neighbors. Two hand-curated test sets — 20 general queries and 20 tech queries, each against their respective corpora.
 
 ---
 
 ## 2. Quantization gap
 
-**What it measures:** how much quality the ternary quantization costs vs full float32. Per-component breakdown helps diagnose which quantization step matters most.
+### Embedding quantization
 
-**Components:**
-- Embedding (ternary post-training, AbsMean) — compare with float32 embedding
-- BitLinear weights (ternary, AbsMedian round-clamp) — compare with float32 BitLinear weights
-- Activation int8 quantization — compare with float32 activations
+Quality delta from the ternary post-training embedding table (AbsMean scaling) vs an fp32 reference. Surfaces how much the embedding lookup is bottlenecking quality.
 
-**Methodology:** TBD. Approach: ablate each quantization step in the Python reference (`dump_embed.py`-style harness), re-run quality eval, report deltas.
+### BitLinear weight quantization
+
+Quality delta from ternary BitLinear weights (AbsMedian round-clamp) vs an fp32 equivalent. Tests whether QAT made the ternary constraint cheap to live with.
+
+### Activation int8 quantization
+
+Quality delta from int8 activations vs fp32. Expected to be the smallest since int8 is far more precise than ternary — mainly a check for surprises.
 
 ---
 
-## 3. Performance
+## 3. Runtime Performance
 
 ### Cold start
 
@@ -102,26 +80,6 @@ node eval/regression/regression_test.js
 | `model.bin` bytes | Largest single asset |
 | `model.bin` gzipped | model.bin is mostly random ternary bytes — compresses poorly |
 | Total npm install | What `du -sh node_modules/@tern/` shows |
-
----
-
-## 5. Compatibility
-
-For each target in `eval/compatibility/runtimes.yaml`:
-- PASS = engine instantiates, `embed("hello world")` returns valid output, output matches canonical reference
-- FAIL with reason
-
----
-
-## 6. Honest comparison
-
-Side-by-side with closest alternatives. For each comparison, document:
-- The other library's version
-- The model used (e.g., `Xenova/all-MiniLM-L6-v2` for transformers.js)
-- The same inputs, the same metrics
-- Bundle sizes and runtime characteristics
-
-The point isn't to "win" on every axis — it's to give users an honest tradeoff so they can pick what fits their constraints.
 
 ---
 

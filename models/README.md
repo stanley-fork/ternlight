@@ -1,40 +1,42 @@
 # models
 
-> Pointers to model release artifacts. Binaries themselves are NOT committed to this repo — they're attached to GitHub Releases and pulled into packages at npm publish time.
+> Pointers to model release artifacts. Binaries themselves are NOT committed to this repo — they're distributed via HuggingFace and GitHub Releases, and bundled into the `ternlight` npm package at publish time.
 
-## Why models live in releases, not git
+## Variants
 
-- Binaries don't diff well in git
-- Repo bloat compounds over time as variants/sizes ship
-- npm packages bundle the model at publish time, so end users never see this layer
-- GitHub Releases give us versioned URLs and download stats for free
+Three quantization variants of the same architecture (2-layer Transformer encoder, ~9.5M parameters, 384-dim L2-normalized output) are shipped. All share the same BERT WordPiece tokenizer (`tokenizer.json`, ~695 KB).
 
-## Where to find current models
+| File | Quantization | Bin size | Spearman vs teacher | Role |
+|---|---|---:|---:|---|
+| **`model-int4.bin`** ⭐ | 4-bit per-row PTQ on embedding; ternary BitLinear | **4.6 MB** | **0.835** | **Primary ship** |
+| `model-embedding-int8.bin` | 8-bit per-row on embedding; ternary BitLinear | 8.3 MB | 0.841 | Higher-quality variant |
+| `model-ternary.bin` | Ternary embedding; ternary BitLinear | 2.9 MB | 0.710 | Size-extreme variant |
 
-Model binaries are attached to GitHub Releases of this repo:
+Each `.bin` ships with a `.bin.json` sidecar carrying provenance — training run ID, source checkpoint, code commit, packing timestamp, SHA-256 — for reproducibility and integrity checks.
+
+## Where to get them
+
+| Channel | Use case |
+|---|---|
+| **[HuggingFace `wenshutang/ternlight`](https://huggingface.co/wenshutang/ternlight)** | Public download via `hf_hub_download` or the HF web UI. Primary distribution channel. |
+| **GitHub Releases** | Versioned URLs with download stats. Consumed by the build pipeline that bundles the `.bin` into the `ternlight` npm package. |
+
+## Why models aren't in git
+
+- Binaries don't diff well and compound repo bloat over time as variants and re-trains accumulate
+- npm consumers get the `.bin` bundled into the published package — they don't need the raw artifact
+- HF + GitHub Releases both give versioned URLs and integrity hashes for free
+
+## Pipeline
 
 ```
-https://github.com/soycaporal/ternlight/releases
-```
-
-Each release includes:
-- `model-micro.bin` — d_model=256, ~3 MB (current default)
-- `model-small.bin` — d_model=384, ~5 MB (planned future tier)
-
-## Workflow
-
-A maintainer runs `scripts/release-model.sh <tag> <path-to-bin>` to attach the binary to a release. The npm publish workflow then downloads the asset and bundles it into `packages/semantic/model.bin` before running `npm publish`.
-
-```
-training/distill/runs/<run-name>/checkpoint_ep<N>.pt    (NOT in git)
+training/distill/runs/<run-name>/checkpoint_ep<N>.pt    (not in git)
         ↓ training/pack/pack.py
-training/pack/out/model.bin                              (NOT in git)
+training/pack/out/model-<variant>.bin                   (not in git)
         ↓ scripts/release-model.sh
-GitHub Release v0.1.0 (model-micro.bin asset)
+GitHub Release v<X.Y.Z>                                 (e.g. model-int4.bin asset)
+        ↓ hf upload wenshutang/ternlight ...
+huggingface.co/wenshutang/ternlight                     (public download)
         ↓ at npm publish time
-packages/semantic/model.bin                              (bundled into the published package)
+packages/ternlight/pkg/                                 (bundled into the published package)
 ```
-
-## Future tiers
-
-A `models/registry.json` may live here later, mapping tier name → release asset URL → expected SHA256, so the JS publish step can validate downloads. Not needed at v0.1 (single tier).

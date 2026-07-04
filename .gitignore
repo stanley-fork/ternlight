@@ -57,4 +57,4 @@ eval/regression/test_data/*.json
 .claude/settings.local.json
 .claude/settings.json
 .docs/
-.docs-local/
+docs-local/

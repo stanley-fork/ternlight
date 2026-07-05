@@ -1,163 +1,76 @@
-# ternlight
+# @ternlight/mini
 
-> On-device semantic embeddings for JavaScript. Embed text, compare
-> similarity, find nearest neighbors — locally, no API keys, no backend.
+**On-device semantic embeddings for JavaScript - the small, fast tier. 5.5 MB on the wire, <2 ms per embedding, zero API calls.**
 
-A 1.58-bit BitNet-style sentence embedder distilled from
-`sentence-transformers/all-MiniLM-L6-v2`. The compiled engine and trained
-model fit in **~5 MB of WASM** and run inference in **~2 ms per query** on
-modern CPUs.
-
-## Install
+A 1.58-bit (BitNet-style ternary) sentence encoder compiled to WebAssembly. Give it text, get back a 384-dimensional unit vector for semantic search, FAQ matching, deduplication, or clustering — computed entirely on the user's CPU. No network, no GPU, no ML runtime, no model download at runtime: the model ships inside the wasm.
 
 ```bash
-npm install ternlight
+npm install @ternlight/mini
 ```
-
-The package bundles the compiled WASM engine. The model weights and BERT
-tokenizer are embedded directly into the `.wasm` — no postinstall download,
-no asset fetching at runtime.
-
-## Use
 
 ```js
-const { embed, cosineSim, similar } = require('ternlight');
+import { embed, cosineSim, similar } from '@ternlight/mini';
 
-// 1. Embed a single string → 384-dim L2-normalized Float32Array
-const v1 = embed("how do I reset my password");
-const v2 = embed("forgot my password");
+// embed() → Float32Array(384), L2-normalized — compare any two with a dot product
+cosineSim(embed('reset my password'), embed('I forgot my password'));   // 0.91
 
-// 2. Compare two embeddings
-cosineSim(v1, v2);  // → ~0.85
-
-// 3. Nearest-neighbor search over a corpus
-const corpus = [
-  "I forgot my password and need to reset it",
-  "where is my package shipment tracking",
-  "how to cancel a recurring subscription",
-];
-const matches = similar("forgot password", corpus, { topK: 3 });
-// → [{ text: "I forgot my password...", sim: 0.86 }, ...]
+// or top-K semantic search over any list of strings
+const results = similar('how do I reset my password', faqEntries, { topK: 3 });
+// [{ text: 'Resetting a forgotten password', sim: 0.80 }, ...]
 ```
+
+Works in Node ≥ 18, browsers (via any bundler), Cloudflare Workers, Vercel Edge, Deno, and Bun — one package, the right loader is picked automatically.
+
+## mini vs base
+
+`mini` is the size/speed tier; [`@ternlight/base`](https://www.npmjs.com/package/@ternlight/base) is the quality tier with the same API:
+
+| | **@ternlight/mini** | @ternlight/base |
+|---|---|---|
+| Wire size (gzipped wasm) | **~5.5 MB** | ~7 MB |
+| Embed latency (p50, M-series CPU) | **1.8 ms** | 4.9 ms |
+| Teacher fidelity (Spearman) | 0.835 | 0.844 |
+| Paraphrase handling | good | noticeably stronger |
+
+Rule of thumb: browser bundles and latency-critical UI → `mini`; server-side, retrieval quality, or paraphrase-heavy matching → `base`. Switching later is a one-line import change.
 
 ## API
 
-### `embed(text: string): Float32Array`
+| Function | Description |
+|---|---|
+| `embed(text)` | → `Float32Array(384)`, unit-length. Sync, <2 ms. Truncates at 128 tokens. |
+| `cosineSim(a, b)` | Cosine similarity of two embeddings (a dot product — they're normalized). |
+| `similar(query, corpus, { topK })` | Embed query + corpus, return top-K `{ text, sim }` sorted. |
+| `engineInfo()` | Build/model info string — dimensions, quantization format. |
+| `TernError` | Typed error (`INVALID_INPUT`, `DIM_MISMATCH`). |
 
-Returns a 384-dim L2-normalized embedding. Output is on the unit hypersphere
-— cosine similarity reduces to a dot product.
-
-Input is tokenized via BERT WordPiece and truncated to **128 tokens (~95
-English words)**. Longer text is silently truncated, so embed at sentence or
-short-paragraph granularity, not full-document.
-
-### `cosineSim(a: Float32Array, b: Float32Array): number`
-
-Cosine similarity between two L2-normalized vectors. For typical text,
-output is in `[0, 1]`.
-
-### `similar(query, corpus, opts?): SimilarityResult[]`
-
-Convenience: embed query, embed each corpus item, return top-K matches
-sorted descending by similarity.
-
-```ts
-interface SimilarityResult {
-  text: string;
-  sim: number;
-}
-```
-
-### `engineInfo(): string`
-
-Debug helper that returns the loaded engine's configuration string. Useful
-for confirming which build is in use:
+For repeated searches, embed your corpus once and reuse the vectors:
 
 ```js
-engineInfo();
-// → "tern-engine v1 | embedding_format=int4 | vocab=30522 d_model=256 ..."
+const index = docs.map((d) => ({ d, v: embed(d.text) }));
+const q = embed(query);
+index.sort((a, b) => cosineSim(q, b.v) - cosineSim(q, a.v));
 ```
 
-### `TernError`
+## Bundler setup (browsers)
 
-All thrown errors are instances of `TernError`. The `code` property gives a
-stable identifier:
-
-- `INVALID_INPUT` — argument wasn't the expected type
-- `DIM_MISMATCH` — vectors of different lengths were compared
-
-## Reuse embeddings (recommended for any non-trivial corpus)
-
-`similar()` re-embeds the corpus on every call, which is fine for small
-demos but wasteful for repeated searches. For real use, embed the corpus
-**once** upfront and reuse the vectors:
+The wasm is imported as an ES module. Webpack 5 needs one flag; Vite needs the wasm plugin:
 
 ```js
-const { embed, cosineSim } = require('ternlight');
+// webpack.config.js
+experiments: { asyncWebAssembly: true }
 
-const corpusEmbeds = corpus.map(embed);  // ~2 ms × N items, do this once
-
-function search(query, k = 5) {
-  const q = embed(query);
-  return corpusEmbeds
-    .map((v, i) => ({ text: corpus[i], sim: cosineSim(q, v) }))
-    .sort((a, b) => b.sim - a.sim)
-    .slice(0, k);
-}
+// vite.config.js
+import wasm from 'vite-plugin-wasm';
+export default { plugins: [wasm()] };
 ```
 
-At ~500 embeddings/sec on a modern CPU, even a 10,000-item corpus is
-~20 seconds to embed once and then sub-3 ms per query forever after.
-Cache the vectors to disk for repeat runs.
+Node needs nothing — `require()` or `import` and go.
 
-## Performance
+## How it works
 
-Measured on an M-series Mac, release build with WASM SIMD:
+Three ideas stacked: **(1)** a small transformer student is distilled from [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) *while being trained as a ternary model* (QAT), so quantization costs almost nothing; **(2)** ternary weights pack to 2 bits each, putting the whole model + tokenizer + engine in one wasm file; **(3)** the forward pass is hand-written Rust compiled to WASM with explicit SIMD, so it runs at near-native speed in every JS runtime. Details in the [repo docs](https://github.com/soycaporal/ternlight/tree/main/docs).
 
-| Metric | Value |
-| --- | --- |
-| Per-call latency (p50) | ~2 ms |
-| Throughput | ~500 embeddings/sec |
-| Bundle | ~11 MB WASM (model + tokenizer + engine, all embedded) |
-| Cold start | ~50 ms (Node `require()` + WASM compile) |
+## License
 
-## Quality
-
-The shipped model is distilled from `sentence-transformers/all-MiniLM-L6-v2`
-via BitNet b1.58-style quantization-aware training, then post-training int4
-quantized at the embedding layer.
-
-Spearman rank correlation vs the MiniLM-L6 teacher on a held-out 100-query
-MS MARCO test split, 1000 random pairs:
-
-| Variant (linear weights ternary in all) | Bin size | Spearman | Pearson |
-| --- | --- | --- | --- |
-| Pre-QAT fp32 student (for reference) | 38.0 MB | 0.883 | 0.907 |
-| `emb_int8` (8-bit embedding lookup) | 8.3 MB | 0.841 | 0.872 |
-| **`emb_int4` (4-bit embedding, current ship)** | **4.6 MB** | **0.835** | **0.864** |
-| `emb_ternary` (1.58-bit embedding) | 2.9 MB | 0.710 | 0.756 |
-
-Full results in
-[`eval/quality/RESULTS.md`](https://github.com/soycaporal/ternlight/blob/main/eval/quality/RESULTS.md).
-
-The model is purpose-built for short-string similarity (queries, intents,
-FAQs, product listings). It's not designed for long-document understanding
-— inputs longer than ~95 English words get truncated to 128 tokens.
-
-## How it works (one paragraph)
-
-A 2-layer Transformer student (~9.5M parameters) is distilled from MiniLM-L6
-during training. All linear layers use BitLinear with ternary weights
-(`{-1, 0, +1}` plus a per-matrix fp32 scale), trained with the BitNet b1.58
-straight-through estimator. After training, the token embedding table gets
-post-training int4 quantization (16 levels per row + a per-row fp32 scale),
-giving the smallest size cost for the embedding lookup that matters most.
-The whole thing packs into a binary that's smaller than most product images.
-
-For the full design, see
-[`docs/overview.md`](https://github.com/soycaporal/ternlight/blob/main/docs/overview.md).
-
-## Status
-
-**v0.1, pre-alpha. Not yet published to npm.** Track progress and issues at
-[github.com/soycaporal/ternlight](https://github.com/soycaporal/ternlight).
+MIT

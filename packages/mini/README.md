@@ -1,6 +1,6 @@
 # @ternlight/mini
 
-**On-device semantic embeddings for JavaScript - the small, fast tier. 5.5 MB on the wire, <2 ms per embedding, zero API calls.**
+**On-device semantic embeddings for JavaScript - the small, fast tier. 5 MB on the wire, ~2.5 ms per embedding, zero API calls.**
 
 A 1.58-bit (BitNet-style ternary) sentence encoder compiled to WebAssembly. Give it text, get back a 384-dimensional unit vector for semantic search, FAQ matching, deduplication, or clustering — computed entirely on the user's CPU. No network, no GPU, no ML runtime, no model download at runtime: the model ships inside the wasm.
 
@@ -27,9 +27,9 @@ Works in Node ≥ 18, browsers (via any bundler), Cloudflare Workers, Vercel Edg
 
 | | **@ternlight/mini** | @ternlight/base |
 |---|---|---|
-| Wire size (gzipped wasm) | **~5.5 MB** | ~7 MB |
-| Embed latency (p50, M-series CPU) | **1.8 ms** | 4.9 ms |
-| Teacher fidelity (Spearman) | 0.835 | 0.844 |
+| Wire size (gzipped wasm) | **~5.0 MB** | ~7.2 MB |
+| Embed latency (p50, M-series CPU) | **~2.5 ms** | ~5 ms |
+| Teacher fidelity (Spearman) | 0.820 | 0.844 |
 | Paraphrase handling | good | noticeably stronger |
 
 Rule of thumb: browser bundles and latency-critical UI → `mini`; server-side, retrieval quality, or paraphrase-heavy matching → `base`. Switching later is a one-line import change.
@@ -38,7 +38,7 @@ Rule of thumb: browser bundles and latency-critical UI → `mini`; server-side, 
 
 | Function | Description |
 |---|---|
-| `embed(text)` | → `Float32Array(384)`, unit-length. Sync, <2 ms. Truncates at 128 tokens. |
+| `embed(text)` | → `Float32Array(384)`, unit-length. Sync, ~2.5 ms. Truncates at 128 tokens. |
 | `cosineSim(a, b)` | Cosine similarity of two embeddings (a dot product — they're normalized). |
 | `similar(query, corpus, { topK })` | Embed query + corpus, return top-K `{ text, sim }` sorted. |
 | `engineInfo()` | Build/model info string — dimensions, quantization format. |

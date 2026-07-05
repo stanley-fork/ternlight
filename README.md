@@ -9,16 +9,42 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://ternlight-demo.vercel.app)
 
-> **Lightening-fast semantic embeddings in a 7 MB WebAssembly bundle.**
-> Engine + model + tokenizer shipped together. Embedding search on CPU — no API calls, no GPU.
+**Lightning-fast semantic embeddings in a 5–7 MB WebAssembly bundle.** Engine + model + tokenizer in one file. Embedding search on CPU — no API calls, no GPU. **[Try the live demo](https://ternlight-demo.vercel.app)** - search 2k docs entirely on-device.
 
-**[Try the live demo](https://ternlight-demo.vercel.app)** - search 2k React docs entirely on-device
+## Install and usage
 
-Distilled from [`all-MiniLM-L6`][minilm], with [BitNet b1.58][bitnet] style quantization-aware training. Three core design choices stack to fit an embedding model in 7 MB:
+Two tiers, same API — pick by size/quality trade ([full comparison](#overview)):
 
-- **Ternary weights.** Every weight is one of three values: `-1`, `0`, or `+1`. Inference becomes add and subtract, no matmul operations. Quality holds because the model is trained for ternary weights from the start, not quantized after the fact.
-- **One bundle.** Model and full BERT tokenizer pack into a single WASM file. `npm install` and you're done — no postinstall step, no runtime fetch.
-- **SIMD inference engine.** Inference engine is written in Rust and compiled to WASM with SIMD. Add/subtract math leans on CPU vector instructions.
+```bash
+npm install @ternlight/base    # quality tier  — 7 MB wire, ~5 ms/embed
+npm install @ternlight/mini    # small tier    — 5 MB wire, ~2.5 ms/embed
+```
+
+```js
+import { embed, cosineSim, similar } from '@ternlight/base';
+
+// One primitive: string → 384-dim L2-normalized Float32Array
+cosineSim(embed('reset my password'), embed('I forgot my password'));   // 0.88
+
+// Nearest-neighbor search over a corpus
+similar('I want my money back', [
+  'Refunds: how to get your money back',
+  'Track the status of your delivery',
+  'Update your billing address',
+], { topK: 2 });
+// → [{ text: 'Refunds: how to get your money back', sim: 0.70 },
+//    { text: 'Update your billing address',         sim: 0.24 }]
+```
+
+Works in Node ≥ 18, browsers (via any bundler), Cloudflare Workers, Vercel Edge, Deno, and Bun — the package routes each environment to the right loader. Package docs: [`@ternlight/base`](packages/base/README.md) · [`@ternlight/mini`](packages/mini/README.md).
+
+## Overview
+
+Distilled from [`all-MiniLM-L6`][minilm] with [BitNet b1.58][bitnet]-style quantization-aware training. Three design choices stack to fit an embedding model in a few MB:
+
+- **Ternary weights** — every weight is `-1`, `0`, or `+1`; inference is adds and subtracts. Quality holds because the model trains as a ternary model from the start.
+- **One bundle** — model + BERT tokenizer + engine in a single `.wasm`. No postinstall step, no runtime fetch.
+- **SIMD inference engine** — hand-written Rust compiled to WASM SIMD; the add/subtract math rides CPU vector instructions.
 
 [minilm]: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
 [bitnet]: https://arxiv.org/abs/2402.17764
@@ -27,60 +53,20 @@ Distilled from [`all-MiniLM-L6`][minilm], with [BitNet b1.58][bitnet] style quan
   <img src="eval/quality/charts/pareto.png" alt="Quality vs size — ternlight reaches 30× compression with a modest accuracy drop" width="720">
 </p>
 
-## Overview
+All numbers measured on the shipped int4 builds (M-series Mac, Node/V8):
 
-A 2-layer Transformer encoder, trained with quantization-aware distillation and int4-quantized at the embedding layer.
-
-| Spec         |                                                                         |
-| ------------ | ----------------------------------------------------------------------- |
-| Bundle       | 7 MB (engine + 4.6 MB model + 695 KB tokenizer, all inside one `.wasm`) |
-| Output       | 384-dim L2-normalized vector                                            |
-| Max input    | 128 tokens (~95 English words)                                          |
-| Architecture | 2-layer Transformer · d_model=256 · 4 attention heads                   |
-| Parameters   | ~9.5M                                                                   |
-| Targets      | Node 18+, modern browsers with WASM SIMD, edge runtimes                 |
-| License      | MIT                                                                     |
-
-### Results 
-
-Based on `emb_int4` quantized embedding - shipped build
-
-| Metric                           |                  |
-| -------------------------------- | ---------------: |
-| Spearman vs MiniLM-L6 teacher    |        **0.835** |
-| Quality retained vs fp32 student |          **95%** |
-| Compression vs fp32 student      |         **8.2×** |
-| Latency p50 (M-series Mac)       |        **~2 ms** |
-| Throughput                       | **~450 emb/sec** |
-
----
-
-## Install and usage
-
-```bash
-npm install ternlight
-```
-
-```js
-import { embed, cosineSim, similar } from 'ternlight';
-
-// One primitive: turn a string into a 384-dim L2-normalized vector
-const v1 = embed("arctic terns migrate from pole to pole");
-const v2 = embed("longest migration in the animal kingdom");
-
-cosineSim(v1, v2);   // ~0.71 — same concept, different words
-
-// Nearest-neighbor search over a corpus
-const matches = similar("which seabird travels farthest", [
-  "arctic terns migrate from pole to pole",
-  "puffins dive underwater for fish",
-  "how to debounce a search input",
-], { topK: 2 });
-// → [{ text: "arctic terns...", sim: 0.78 },
-//    { text: "puffins...",      sim: 0.31 }]
-```
-
-> **Status:** v0.1 (pre-alpha). The engine works end-to-end and matches Phase 1 quality baselines. Packaging, performance polish, and public release are still in progress. Not yet on npm.
+|                                  | @ternlight/mini            | @ternlight/base            |
+| -------------------------------- | -------------------------- | -------------------------- |
+| **Wire size** (gzipped wasm)     | **5.0 MB**                 | **7.2 MB**                 |
+| **Latency** (p50 per embed)      | **2.5 ms**                 | **5.1 ms**                 |
+| Throughput (single-thread)       | ~400 emb/s                 | ~195 emb/s                 |
+| Spearman vs MiniLM-L6 teacher    | 0.820                      | **0.844**                  |
+| Retrieval (SciFact NDCG@10)      | 0.439                      | **0.465**                  |
+| Architecture                     | 2-layer · d_model=256 · 4 heads | 2-layer · d_model=384 · 6 heads |
+| Parameters                       | ~9.5M                      | ~15.4M                     |
+| Output                           | 384-dim L2-normalized      | 384-dim L2-normalized      |
+| Max input                        | 128 tokens (~95 words)     | 128 tokens (~95 words)     |
+| Quantization                     | ternary weights · int4 embeddings | ternary weights · int4 embeddings |
 
 ## Why this exists
 
@@ -99,17 +85,19 @@ On-device embedding unlocks:
 
 ```
 ternlight/
-├── packages/         JS packages (npm, pnpm workspace)
-│   ├── semantic/     @tern/semantic — embedding API
-│   └── core/         @tern/core — shared types
+├── packages/         Published npm packages (pnpm workspace)
+│   ├── base/         @ternlight/base — quality tier (d384)
+│   └── mini/         @ternlight/mini — small/fast tier (d256)
 ├── engine/           Rust → Wasm inference engine
-├── training/         Python distillation pipeline
+├── training/         Python distillation + QAT pipeline, packer
 ├── eval/             Engine quality + perf benchmarks
-├── docs/             Design docs, architecture, postmortems
+├── docs/             Design docs
 ├── models/           Model release registry pointers
-├── scripts/          Build orchestration
+├── scripts/          Build + release orchestration
 └── .github/          CI workflows
 ```
+
+Deeper reading: [project overview](docs/overview.md) · [architecture](docs/architecture.md) · [inference engine](docs/inference-engine.md) · [model internals](docs/model-internals.md) · [eval methodology](docs/eval-methodology.md).
 
 ## Contributing
 
@@ -137,4 +125,4 @@ MIT — see [LICENSE](LICENSE).
 
 ---
 
-<p align="center"><em>In loving memory of Alex Movsessian - whose mind for software was matched only by the kindness he showed others.</em></p>
+<p align="center"><em>In memory of Alex Movsessian - who held software to the highest standard, and treated everyone around him with kindness.</em></p>

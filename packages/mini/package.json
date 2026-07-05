@@ -1,7 +1,7 @@
 {
   "name": "@ternlight/mini",
   "version": "0.1.0",
-  "description": "On-device semantic embeddings for JavaScript — the small, fast tier. 1.58-bit BitNet-style sentence embedder via WASM. ~5.5 MB on the wire, <2 ms per embedding, no API calls.",
+  "description": "On-device semantic embeddings for JavaScript — the small, fast tier. 1.58-bit BitNet-style sentence embedder via WASM. ~5 MB on the wire, ~2.5 ms per embedding, no API calls.",
   "license": "MIT",
   "repository": {
     "type": "git",

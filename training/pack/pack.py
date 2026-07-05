@@ -82,29 +82,13 @@ def _apply_embedding_ptq(model: StudentEncoder, embedding_format_name: str) -> N
         print(f"  int8 PTQ applied: scale ∈ [{stats['scale_min']:.4f}, {stats['scale_max']:.4f}]")
         return
     if embedding_format_name == "int4":
-        # Same shape as int8 but range [-7, 7]
-        _int4_quantize_embedding_inplace(model)
+        stats = ternary_qat.int4_quantize_embedding_(model)
+        print(f"  int4 PTQ applied: scale ∈ [{stats['scale_min']:.4f}, {stats['scale_max']:.4f}]")
         return
     if embedding_format_name == "ternary":
         _ternary_per_row_embedding_inplace(model)
         return
     raise ValueError(f"unknown embedding_format: {embedding_format_name}")
-
-
-def _int4_quantize_embedding_inplace(model: StudentEncoder) -> None:
-    """Per-row int4 PTQ — mirrors encoders.encode_embedding_int4's quant.
-
-    NOT a permanent home — should eventually move to training/distill/ternary_qat.py
-    alongside int8_quantize_embedding_(). Left here for now to keep this PR
-    self-contained.
-    """
-    with torch.no_grad():
-        w = model.embedding.weight
-        emb = w[1:]
-        scales = (emb.abs().amax(dim=1) / 7.0).clamp(min=1e-8)
-        q = (emb / scales.unsqueeze(1)).round().clamp(-7, 7)
-        w[1:] = q * scales.unsqueeze(1)
-    print(f"  int4 PTQ applied: scale ∈ [{scales.min().item():.4f}, {scales.max().item():.4f}]")
 
 
 def _ternary_per_row_embedding_inplace(model: StudentEncoder) -> None:

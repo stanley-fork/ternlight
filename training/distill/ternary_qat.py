@@ -111,6 +111,29 @@ def int8_quantize_embedding_(model: nn.Module, mode: str = "per_row") -> dict[st
     }
 
 
+def int4_quantize_embedding_(model: nn.Module) -> dict[str, float]:
+    """Post-training: int4-quantize the embedding table in place (per-row scale).
+
+    Same shape as int8_quantize_embedding_() but range [-7, 7]. Mirrors
+    pack/encoders.encode_embedding_int4's quant math — moved here from
+    pack.py so eval and pack share one implementation (the single-source
+    contract from tern-training-pipeline.md Phase 5).
+
+    Returns {scale_min, scale_max, scale_mean} for sanity logging.
+    """
+    with torch.no_grad():
+        w = model.embedding.weight
+        emb = w[1:]   # skip padding row
+        scales = (emb.abs().amax(dim=1) / 7.0).clamp(min=1e-8)
+        q = (emb / scales.unsqueeze(1)).round().clamp(-7, 7)
+        w[1:] = q * scales.unsqueeze(1)
+    return {
+        "scale_min":  scales.min().item(),
+        "scale_max":  scales.max().item(),
+        "scale_mean": scales.mean().item(),
+    }
+
+
 def ternarize_embedding_(model: nn.Module) -> dict[str, float]:
     """Post-training: snap the embedding table to ternary {-1, 0, +1} in place.
 

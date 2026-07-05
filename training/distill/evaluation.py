@@ -105,6 +105,7 @@ def load_for_eval(ckpt_path: Path, device: str, embedding_format: str = "ternary
     embedding_format options (QAT only):
       - "ternary": snap to {-1, 0, +1} via AbsMean threshold (current shipped default)
       - "int8":    per-row int8 PTQ (likely-quality alt; ~8 MB packed)
+      - "int4":    per-row int4 PTQ (build-engine.sh ship default; ~5 MB packed)
       - "fp32":    leave embedding untouched (control; ~31 MB packed — ablation only)
     """
     print(f"→ Loading ckpt: {ckpt_path}")
@@ -143,6 +144,10 @@ def load_for_eval(ckpt_path: Path, device: str, embedding_format: str = "ternary
             stats = ternary_qat.int8_quantize_embedding_(model)
             print(f"  int8-PTQ embedding: scale ∈ [{stats['scale_min']:.4f}, {stats['scale_max']:.4f}]  mean={stats['scale_mean']:.4f}")
             applied_format = "int8"
+        elif embedding_format == "int4":
+            stats = ternary_qat.int4_quantize_embedding_(model)
+            print(f"  int4-PTQ embedding: scale ∈ [{stats['scale_min']:.4f}, {stats['scale_max']:.4f}]  mean={stats['scale_mean']:.4f}")
+            applied_format = "int4"
         elif embedding_format == "ternary":
             stats = ternary_qat.ternarize_embedding_(model)
             print(f"  ternarized embedding: scale={stats['scale']:.4f}  zero_frac={stats['zero_fraction']:.3f}")
@@ -545,7 +550,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 4 — eval a QAT ckpt")
     parser.add_argument("--config", type=Path, required=True,
                         help="path to YAML config")
-    parser.add_argument("--embedding-format", choices=("ternary", "int8", "fp32"),
+    parser.add_argument("--embedding-format", choices=("ternary", "int8", "int4", "fp32"),
                         default="ternary",
                         help="PTQ embedding format to apply at eval time "
                              "(QAT ckpt only; fp32 baseline is never quantized). "

@@ -1,0 +1,45 @@
+# THE robust run — d_model=384 on the balanced mix-v3 1M cache, 40 epochs.
+# Green-lit by the 2026-07-04 pilot gate (d384+mixv2 pilot: test/spearman
+# 0.7954 vs control 0.7693, all retrieval metrics up, probe gap 0.114→0.096).
+#
+# Judged after training against the shipped d256 robust model (qat-resume ep40,
+# int8 ship form): test/spearman 0.8278, ndcg@10 0.4504. If the pilot's lift
+# holds at scale, expect ~0.85 / ~0.47.
+#
+# Wall-clock estimate (RTX 4090, from measured pilot 68s/epoch at 250k):
+# ~4.5-5 min/epoch at ~1M → 40 epochs ≈ 3-3.5 h.
+
+wandb_project: ternlight-micro
+wandb_group: robust-d384-mixv3
+wandb_tags:
+  - tier:small
+  - phase:robust-d384-mixv3
+  - mode:qat
+
+train:
+  vocab_size: 30522
+  d_model: 384
+  n_layers: 2
+  n_heads: 6                # d_head = 64, same as the shipped d256 model
+  ffn_dim: 1536
+  output_dim: 384
+  dropout: 0.1
+
+  cache_dir: cache
+  cache_name: mix_v3_1M
+
+  epochs: 40                # matches the shipped robust run for comparability
+  batch_size: 64
+  lr: 1.0e-4
+  weight_decay: 0.01
+  lr_warmup_ratio: 0.10
+  grad_clip: 1.0
+
+  enable_qat: true
+  qat_warmup_epochs: 4      # 10% of 40, proportional
+  contrastive_w: 0.15
+
+  run_name: robust-d384-mixv3
+  runs_dir: runs
+  save_every: 5             # resumability — 40 epochs is a 3h+ commitment
+  log_every_n_steps: 100

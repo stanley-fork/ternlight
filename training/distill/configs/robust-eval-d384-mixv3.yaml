@@ -1,0 +1,25 @@
+# Final gate for the robust d384 run — scored on the SAME fixed instruments as
+# the shipped d256 model (old msmarco_mix_1M test split + SciFact, int8 ship
+# form) so the comparison is apples-to-apples:
+#   shipped d256 (qat-resume ep40, int8): test/spearman 0.8278, ndcg@10 0.4504,
+#   recall@5 0.5131, recall@10 0.5969  (Stage A, tern-training-pipeline.md)
+
+wandb_project: ternlight-micro
+wandb_group: robust-d384-mixv3
+wandb_tags:
+  - tier:small
+  - phase:robust-d384-mixv3
+  - mode:eval
+
+eval:
+  ckpt_path:          runs/robust-d384-mixv3-unknown/checkpoint_ep40.pt
+  cache_dir:          cache
+  cache_name:         msmarco_mix_1M      # old test split — fixed instrument
+  stsb_dataset:       mteb/stsbenchmark-sts
+  retrieval_dataset:  BeIR/scifact
+  batch_size:         128
+  eval_test_split:    true
+  eval_stsb:          true
+  eval_retrieval:     true
+  eval_qat_health:    true
+  run_name:           robust-eval-d384-mixv3

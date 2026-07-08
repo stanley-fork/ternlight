@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://ternlight-demo.vercel.app)
 
-**Lightning-fast semantic embeddings in a 5–7 MB WebAssembly bundle.** Engine + model + tokenizer in one file. Embedding search on CPU — no API calls, no GPU. **[Try the live demo](https://ternlight-demo.vercel.app)** - search 2k docs entirely on-device.
+**Lightning-fast semantic embeddings in a 5-7 MB WebAssembly bundle.** Engine + model + tokenizer in one file. Embedding search on CPU — no API calls, no GPU. **[Try the live demo](https://ternlight-demo.vercel.app)** - search 2k docs entirely on-device.
 
 ## Install and usage
 
@@ -98,6 +98,46 @@ ternlight/
 ```
 
 Deeper reading: [project overview](docs/overview.md) · [architecture](docs/architecture.md) · [inference engine](docs/inference-engine.md) · [model internals](docs/model-internals.md) · [eval methodology](docs/eval-methodology.md).
+
+## Bundling
+
+The browser build ships WebAssembly as an ES-module asset (wasm-bindgen bundler target). Modern bundlers handle this natively; a couple need a one-line adjustment. Thanks to [@dmisdm](https://github.com/dmisdm) for [surfacing the Vite setup](https://github.com/soycaporal/ternlight/issues/3).
+
+**Vite** - exclude the package from dependency pre-bundling so Vite's own pipeline instantiates the WASM:
+
+```js
+// vite.config.js
+export default {
+  optimizeDeps: {
+    exclude: ['@ternlight/base'],   // or '@ternlight/mini'
+  },
+};
+```
+
+Requires **Vite ≥ 8.1**, which handles WASM ESM out of the box with no plugin ([release notes](https://vite.dev/blog/announcing-vite8-1)). On older Vite, also add [`vite-plugin-wasm`](https://www.npmjs.com/package/vite-plugin-wasm). Astro, SvelteKit, and Nuxt are Vite-based - same fix would apply.
+
+**Next.js** — enable async WASM in the webpack config; the model runs client-side, so import it from a Client Component (or via `next/dynamic`):
+
+```js
+// next.config.js
+module.exports = {
+  webpack(config) {
+    config.experiments = { ...config.experiments, asyncWebAssembly: true };
+    return config;
+  },
+};
+```
+
+**webpack 5** - same experiment flag:
+
+```js
+// webpack.config.js
+module.exports = {
+  experiments: { asyncWebAssembly: true },
+};
+```
+
+**Cloudflare Workers, Vercel Edge, Deno, Bun** — work with no extra config; the package routes each to the right loader.
 
 ## Contributing
 
